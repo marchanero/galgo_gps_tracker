@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-#define SDA_PIN 12  // Pin SDA alternativo
+#define SDA_PIN 26  // Pin SDA alternativo 25 zumbador
 #define SCL_PIN 22  // Pin SCL alternativo
 
 TwoWire I2C = TwoWire(1); // Usar el segundo canal I2C
