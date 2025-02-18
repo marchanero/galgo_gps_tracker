@@ -13,7 +13,7 @@ const uint8_t MAX_INIT_ATTEMPTS = 3;    // Máximo número de intentos de inicia
 
 // Nuevas variables globales para control de calibración
 const uint32_t CALIBRATION_TIMEOUT_MS = 30000; // 30 segundos de tiempo máximo de calibración
-bool debug_bno055 = true; // Flag para modo debug. Si es true, se omite la calibración
+bool debug_bno055 = false; // Flag para modo debug. Si es true, se omite la calibración
 
 // Declaración correcta de estructuras
 struct SensorHistory {
@@ -143,16 +143,22 @@ void calibrateSensor() {
         delay(250);
         Serial.print(".");
     }
-    uint32_t elapsed = millis() - calibrationStart; // Tiempo transcurrido
+    uint32_t elapsed = millis() - calibrationStart; // Tiempo transcurrido en ms
+    
+    // Convertir a horas, minutos y segundos
+    uint32_t hours   = elapsed / 3600000;               // 3600000 ms en 1 hora
+    uint32_t minutes = (elapsed % 3600000) / 60000;       // 60000 ms en 1 minuto
+    uint32_t seconds = (elapsed % 60000) / 1000;          // 1000 ms en 1 segundo
+    
     if (!checkCalibration()) {
         Serial.println("\nERROR: Tiempo de calibración agotado.");
-    }
-    else {
+    } else {
         Serial.println("\nSensor calibrado.");
     }
     Serial.print("Tiempo de calibración: ");
-    Serial.print(elapsed);
-    Serial.println(" ms");
+    Serial.print(hours);   Serial.print("h ");
+    Serial.print(minutes); Serial.print("m ");
+    Serial.print(seconds); Serial.println("s");
     
     digitalWrite(LED_BUILTIN, HIGH); // LED fijo en encendido para indicar toma de datos
 }
