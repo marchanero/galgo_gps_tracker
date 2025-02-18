@@ -60,6 +60,14 @@ struct Position {
 };
 Position position = {0.0f, 0.0f, 0.0f};
 
+// Nueva estructura global para los offsets de calibración del magnetómetro
+struct MagCalibrationOffset {
+    float x;
+    float y;
+    float z;
+};
+MagCalibrationOffset magOffset = {0.0f, 0.0f, 0.0f}; // Ajustar con valores de calibración
+
 // Función para imprimir una línea centrada
 void printCentered(const char* text) {
     // Versión simplificada sin bordes
@@ -349,6 +357,18 @@ void loop() {
         Serial.print("📡 Magnetometer X: "); Serial.print(mag.x(), 2); Serial.print(" uT");
         Serial.print(", Y: ");               Serial.print(mag.y(), 2); Serial.print(" uT");
         Serial.print(", Z: ");               Serial.print(mag.z(), 2); Serial.println(" uT");
+        
+        // Se aplica compensación al magnetómetro
+        {
+            float corrMagX = mag.x() - magOffset.x;
+            float corrMagY = mag.y() - magOffset.y;
+            float corrMagZ = mag.z() - magOffset.z;
+            float corrMagStrength = sqrt(corrMagX*corrMagX + corrMagY*corrMagY + corrMagZ*corrMagZ);
+            Serial.print("📡 Magnetómetro compensado X: "); Serial.print(corrMagX, 2); Serial.print(" uT");
+            Serial.print(", Y: "); Serial.print(corrMagY, 2); Serial.print(" uT");
+            Serial.print(", Z: "); Serial.print(corrMagZ, 2); Serial.println(" uT");
+            Serial.print("📡 Fuerza del Campo Magnético (Compensado): "); Serial.print(corrMagStrength, 2); Serial.println(" uT");
+        }
         
         // Nueva sección para calcular y mostrar la fuerza del campo magnético
         {
