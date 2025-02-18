@@ -44,6 +44,22 @@ SensorState sensorState = {false, 0, 0, false};
 // Instanciar el sensor BNO055 en el bus I2Cbus I2C
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
 
+// Nueva estructura y variable global para la velocidad lineal
+struct LinearVelocity {
+    float x;
+    float y;
+    float z;
+};
+LinearVelocity linearVelocity = {0.0f, 0.0f, 0.0f};
+
+// Nueva estructura y variable global para la posición estimada (desplazamiento)
+struct Position {
+    float x;
+    float y;
+    float z;
+};
+Position position = {0.0f, 0.0f, 0.0f};
+
 // Función para imprimir una línea centrada
 void printCentered(const char* text) {
     // Versión simplificada sin bordes
@@ -163,6 +179,19 @@ void calibrateSensor() {
     digitalWrite(LED_BUILTIN, HIGH); // LED fijo en encendido para indicar toma de datos
 }
 
+// Nueva función para convertir el ángulo de la brújula a dirección cardinal
+const char* getCompassDirection(float heading) {
+    if (heading < 0) heading += 360;
+    if (heading < 22.5 || heading >= 337.5) return "Norte";
+    else if (heading < 67.5) return "Noreste";
+    else if (heading < 112.5) return "Este";
+    else if (heading < 157.5) return "Sureste";
+    else if (heading < 202.5) return "Sur";
+    else if (heading < 247.5) return "Suroeste";
+    else if (heading < 292.5) return "Oeste";
+    else return "Noroeste";
+}
+
 void setup() {
     Serial.begin(115200);
     Serial.println("\n\n");
@@ -189,10 +218,12 @@ void setup() {
 }
 
 void loop() {
-    static uint32_t last_update = 0;
+    static uint32_t last_update = millis(); // Inicializar con millis()
     uint32_t current_time = millis();
-
-    if (current_time - last_update >= SAMPLE_RATE_MS) {
+    uint32_t dt_ms = current_time - last_update;
+    
+    if (dt_ms >= SAMPLE_RATE_MS) {
+        float dt = dt_ms / 1000.0f; // Conversión a segundos
         last_update = current_time;
         updateSystemState();
 
@@ -222,6 +253,31 @@ void loop() {
 
         updateHistory(derivedData.total_acceleration, derivedData.angular_velocity);
 
+        // Integrar aceleración para obtener la velocidad lineal
+        linearVelocity.x += accel.x() * dt;
+        linearVelocity.y += accel.y() * dt;
+        linearVelocity.z += accel.z() * dt;
+        
+        // Nueva integración: integrar la velocidad para obtener la posición (desplazamiento)
+        position.x += linearVelocity.x * dt;
+        position.y += linearVelocity.y * dt;
+        position.z += linearVelocity.z * dt;
+        
+        // Complementary filter para la estimación de la inclinación dinámica
+        {
+            static float dynamicTilt = 0.0f;
+            static bool initDynamic = true;
+            float accelTilt = derivedData.tilt_angle; // Inclinación derivada del acelerómetro
+            if (initDynamic) {
+                dynamicTilt = accelTilt;
+                initDynamic = false;
+            } else {
+                // Se utiliza un factor alfa (ej. 0.98) para integrar el rate del giroscopio (asumido en gyro.x())
+                dynamicTilt = 0.98f * (dynamicTilt + gyro.x() * dt) + 0.02f * accelTilt;
+            }
+            Serial.print("📏 Inclinación Dinámica: "); Serial.print(dynamicTilt, 2); Serial.println("°");
+        }
+
         // Nueva salida por consola
         Serial.println("============== SENSOR DATA ==============");
         Serial.print("⏱️  Time: ");            Serial.println(current_time);
@@ -236,20 +292,71 @@ void loop() {
         Serial.print(", Y: ");       Serial.print(euler.y(), 2); Serial.print("°");
         Serial.print(", Z: ");       Serial.print(euler.z(), 2); Serial.println("°");
         
+        // Nueva línea para mostrar la dirección de la brújula basada en el ángulo Euler X
+        {
+            float heading = euler.x(); // asumiendo que Euler X corresponde al heading
+            const char* compassDir = getCompassDirection(heading);
+            Serial.print("🧭 Dirección de la Brújula: ");
+            Serial.println(compassDir);
+        }
+        
         // Aceleración lineal (VECTOR_LINEARACCEL, m/s^2)
         Serial.print("📈 Linear Accel X: "); Serial.print(accel.x(), 2); Serial.print(" m/s²");
         Serial.print(", Y: ");              Serial.print(accel.y(), 2); Serial.print(" m/s²");
         Serial.print(", Z: ");              Serial.print(accel.z(), 2); Serial.println(" m/s²");
         
+        // Nueva salida por consola para la velocidad lineal
+        Serial.print("🚀 Velocidad Lineal X: "); Serial.print(linearVelocity.x, 2); Serial.print(" m/s");
+        Serial.print(" | Y: "); Serial.print(linearVelocity.y, 2); Serial.print(" m/s");
+        Serial.print(" | Z: "); Serial.print(linearVelocity.z, 2); Serial.println(" m/s");
+
+        // Nueva salida por consola para la posición estimada
+        Serial.print("📍 Posición Estimada X: "); Serial.print(position.x, 2); Serial.print(" m");
+        Serial.print(" | Y: "); Serial.print(position.y, 2); Serial.print(" m");
+        Serial.print(" | Z: "); Serial.print(position.z, 2); Serial.println(" m");
+
         // Giroscopio (VECTOR_GYROSCOPE, rps)
         Serial.print("🌀 Gyroscope X: "); Serial.print(gyro.x(), 2); Serial.print(" rps");
         Serial.print(", Y: ");            Serial.print(gyro.y(), 2); Serial.print(" rps");
         Serial.print(", Z: ");            Serial.print(gyro.z(), 2); Serial.println(" rps");
         
+        // Nueva sección para calcular y mostrar el Heading Rate (derivado del giroscopio Z)
+        {
+            float headingRate = gyro.z();
+            Serial.print("📏 Heading Rate: "); Serial.print(headingRate, 2); Serial.println(" deg/s");
+        }
+        
+        // Nueva sección para calcular y mostrar el Drift del Giroscopio
+        {
+            static float driftSumX = 0.0f, driftSumY = 0.0f, driftSumZ = 0.0f;
+            static uint32_t driftCount = 0;
+            // Si el giroscopio está en reposo (lecturas pequeñas)
+            if (fabs(gyro.x()) < 0.1f && fabs(gyro.y()) < 0.1f && fabs(gyro.z()) < 0.1f) {
+                driftSumX += gyro.x();
+                driftSumY += gyro.y();
+                driftSumZ += gyro.z();
+                driftCount++;
+            }
+            float avgDriftX = driftCount > 0 ? driftSumX / driftCount : 0.0f;
+            float avgDriftY = driftCount > 0 ? driftSumY / driftCount : 0.0f;
+            float avgDriftZ = driftCount > 0 ? driftSumZ / driftCount : 0.0f;
+            Serial.print("🧭 Gyro Drift X: "); Serial.print(avgDriftX, 2); Serial.print(" rps");
+            Serial.print(" | Y: "); Serial.print(avgDriftY, 2); Serial.print(" rps");
+            Serial.print(" | Z: "); Serial.print(avgDriftZ, 2); Serial.println(" rps");
+        }
+        
         // Magnetómetro (VECTOR_MAGNETOMETER, uT)
         Serial.print("📡 Magnetometer X: "); Serial.print(mag.x(), 2); Serial.print(" uT");
         Serial.print(", Y: ");               Serial.print(mag.y(), 2); Serial.print(" uT");
         Serial.print(", Z: ");               Serial.print(mag.z(), 2); Serial.println(" uT");
+        
+        // Nueva sección para calcular y mostrar la fuerza del campo magnético
+        {
+            float magFieldStrength = calculateMagnitude(mag);
+            Serial.print("📡 Fuerza del Campo Magnético: ");
+            Serial.print(magFieldStrength, 2);
+            Serial.println(" uT");
+        }
         
         // Acelerómetro completo (VECTOR_ACCELEROMETER, m/s^2)
         Serial.print("📊 Accelerometer X: "); Serial.print(accelFull.x(), 2); Serial.print(" m/s²");
