@@ -3,6 +3,7 @@
 #include <Adafruit_BNO055.h>
 #include <Adafruit_Sensor.h>
 #include "utility/imumaths.h"
+#include "gps_module.h"
 
 // Constantes para la configuración del sistema// Constantes para la configuración del sistema
 const uint16_t SAMPLE_RATE_MS = 100;  // Tasa de muestreo en milisegundose muestreo en milisegundos
@@ -257,6 +258,9 @@ void setup() {
     printCentered("Sensor Inicializado Correctamente");
     // Llamada a la función de calibración para establecer el estado inicial
     calibrateSensor();
+    
+    // Inicialización del módulo GPS
+    gpsInit();
 }
 
 void loop() {
@@ -499,4 +503,7 @@ void loop() {
         Serial.print(" Z: ");                Serial.println(quat.z(), 4);
         Serial.println("=========================================\n");
     }
+    
+    // Llamada al procesamiento del módulo GPS
+    gpsProcess();
 }
