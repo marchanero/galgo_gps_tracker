@@ -1,5 +1,7 @@
 #include "gps_module.h"
 #include <math.h>  // Agregado para la fórmula de Haversine
+#include <algorithm>  // Añadido para std::sort
+#include <cstring>    // Añadido para memcpy
 
 #define RXD2 16  // Pin RX del GPS
 #define TXD2 17  // Pin TX del GPS
@@ -42,6 +44,14 @@ static float maxAcceleration = 0.0;
 
 // Variable para carga de entrenamiento (TRIMP)
 static float trainingLoad = 0.0;
+
+// NUEVA CONSTANTE: Offset geoid para corrección de altitud (ejemplo, ajuste según datos EGM96)
+static const float GEOID_OFFSET = 27.0; // Valor de ejemplo en metros
+
+// NUEVAS DEFINICIONES: Ventana temporal para suavizar aceleración
+#define WINDOW_SIZE 10
+float speedWindow[WINDOW_SIZE] = {0};
+int speedWindowIndex = 0;
 
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
@@ -90,6 +100,20 @@ void calibrateGPSVariables() {
     Serial.println("✅ Variables del GPS calibradas.");
 }
 
+// NUEVA FUNCIÓN: Configurar el GPS para una fijación rápida y mayor precisión
+void configureGPS() {
+    // Aumenta la tasa de actualización (por ejemplo, a 200 ms -> 5Hz)
+    gpsSerial.println("$PMTK220,200*2C"); // Configura actualización cada 200ms (5Hz)
+    
+    // Limita las sentencias NMEA a solo las necesarias (por ejemplo, GPRMC y GPGGA)
+    gpsSerial.println("$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*29");
+    
+    // (Opcional) Habilitar modo de alta precisión si el receptor lo permite
+    // gpsSerial.println("$PMTK301,2*2E");
+    
+    Serial.println("✅ GPS configurado para fijación rápida y mayor precisión");
+}
+
 void gpsInit() {
     Serial.println("\n🛰️ Configurando GPS para máxima recepción...");
     gpsSerial.setRxBufferSize(1024);
@@ -102,6 +126,9 @@ void gpsInit() {
     
     // Calibrar variables del GPS
     calibrateGPSVariables();
+    
+    // Configurar el GPS para acelerar la fijación y mejorar precisión
+    configureGPS();
 }
 
 static bool checkSignalQuality() {
@@ -140,18 +167,29 @@ void checkCourseChange() {
 }
 
 // Calcula y muestra la aceleración
+float getSmoothedAcceleration(float newSpeed, unsigned long deltaTime) {
+    speedWindow[speedWindowIndex] = newSpeed;
+    speedWindowIndex = (speedWindowIndex + 1) % WINDOW_SIZE;
+    float sum = 0;
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+        sum += speedWindow[i];
+    }
+    float avgSpeed = sum / WINDOW_SIZE;
+    return (newSpeed - avgSpeed) / (deltaTime / 1000.0);
+}
+
+// Modificar calculateAcceleration() para usar el filtro de aceleración suavizada
 void calculateAcceleration() {
     if (gps.speed.isValid()) {
         float currentSpeed = gps.speed.kmph();
         unsigned long currentTime = millis();
-        float deltaTime = (currentTime - lastTime) / 1000.0;
-        if (deltaTime > 0) {
-            float acceleration = (currentSpeed - previousSpeed) / deltaTime;
-            Serial.print("📈 Aceleración: ");
-            Serial.print(acceleration, 2);
+        unsigned long dt = currentTime - lastTime;
+        if (dt > 0) {
+            float smoothedAcc = getSmoothedAcceleration(currentSpeed, dt);
+            Serial.print("📈 Aceleración (Suavizada): ");
+            Serial.print(smoothedAcc, 2);
             Serial.println(" m/s²");
         }
-        previousSpeed = currentSpeed;
         lastTime = currentTime;
     }
 }
@@ -188,7 +226,7 @@ double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
     return R * c;
 }
 
-// Actualiza y muestra la distancia total recorrida
+// MODIFICACIÓN DE updateDistance(): Se muestra la distancia en metros (totalDistance en km * 1000)
 void updateDistance() {
     if (gps.location.isValid()) {
         double currentLat = gps.location.lat();
@@ -199,15 +237,52 @@ void updateDistance() {
         lastLat = currentLat;
         lastLon = currentLon;
     }
+    // Convertir kilómetros a metros
+    double totalDistanceMeters = totalDistance * 1000;
     Serial.print("🏃 Distancia total: ");
-    Serial.print(totalDistance, 2);
-    Serial.println(" km");
+    Serial.print(totalDistanceMeters, 0);
+    Serial.println(" m");
 }
 
-// Actualiza y muestra la velocidad máxima y media
+// NUEVAS DEFINICIONES: Filtros para suavizar la velocidad
+#define FILTER_SIZE 5  // Número de muestras para el promedio móvil
+float speedBuffer[FILTER_SIZE] = {0};
+int speedIndex = 0;
+
+float getFilteredSpeed(float newSpeed) {
+    speedBuffer[speedIndex] = newSpeed;
+    speedIndex = (speedIndex + 1) % FILTER_SIZE;
+    float sum = 0;
+    for (int i = 0; i < FILTER_SIZE; i++) {
+        sum += speedBuffer[i];
+    }
+    return sum / FILTER_SIZE;
+}
+
+#define MEDIAN_FILTER_SIZE 5  // Número de muestras para el filtro de mediana
+float speedValues[MEDIAN_FILTER_SIZE] = {0};
+
+float getMedianSpeed(float newSpeed) {
+    // Desplazar los valores previos
+    for (int i = MEDIAN_FILTER_SIZE - 1; i > 0; i--) {
+        speedValues[i] = speedValues[i - 1];
+    }
+    speedValues[0] = newSpeed;
+    float sorted[MEDIAN_FILTER_SIZE];
+    memcpy(sorted, speedValues, sizeof(speedValues));
+    std::sort(sorted, sorted + MEDIAN_FILTER_SIZE);
+    return sorted[MEDIAN_FILTER_SIZE / 2];  // Devuelve la mediana
+}
+
+// Modificar updateSpeedMetrics para usar los filtros de velocidad
 void updateSpeedMetrics() {
     if (gps.speed.isValid()) {
-        float currentSpeed = gps.speed.kmph();
+        float rawSpeed = gps.speed.kmph();
+        float filteredSpeed = getFilteredSpeed(rawSpeed);
+        float medianSpeed = getMedianSpeed(rawSpeed);
+        // Usar el valor mediano como velocidad "limpia"
+        float currentSpeed = medianSpeed;
+        
         if (currentSpeed > maxSpeed) {
             maxSpeed = currentSpeed;
         }
@@ -302,6 +377,20 @@ void displayGPSTime() {
     }
 }
 
+// NUEVA FUNCIÓN: Ajusta la altitud usando el modelo EGM96
+float adjustAltitude(float gpsAltitude, float geoidOffset) {
+    return gpsAltitude - geoidOffset;
+}
+
+// NUEVA FUNCIÓN: Validación de Datos GPS (Para Evitar Saltos de Posición)
+bool isValidGPSFix() {
+    if (!gps.location.isValid()) return false;
+    if (!gps.speed.isValid()) return false;
+    if (!gps.satellites.isValid() || gps.satellites.value() < 4) return false;
+    if (!gps.hdop.isValid() || gps.hdop.hdop() > 5.0) return false;
+    return true;
+}
+
 void gpsProcess() {
     // Leer datos del GPS
     while (gpsSerial.available()) {
@@ -330,7 +419,7 @@ void gpsProcess() {
         Serial.print(uptime);
         Serial.println(" s\n");
         
-        if (gps.location.isValid()) {
+        if (isValidGPSFix()) {  // Se usa la validación de datos GPS
             double curLat = gps.location.lat();
             double curLon = gps.location.lng();
             Serial.println("✅ GPS FIX:");
@@ -338,8 +427,11 @@ void gpsProcess() {
             Serial.println(curLat, 6);
             Serial.print("   📍 Longitud: ");
             Serial.println(curLon, 6);
+            // Usar la corrección de altitud
+            float rawAltitude = gps.altitude.meters();
+            float correctedAltitude = adjustAltitude(rawAltitude, GEOID_OFFSET);
             Serial.print("   🏔️ Altitud:  ");
-            Serial.print(gps.altitude.meters());
+            Serial.print(correctedAltitude);
             Serial.println(" m");
             Serial.print("   🚀 Velocidad: ");
             Serial.print(gps.speed.kmph(), 2);
@@ -352,6 +444,12 @@ void gpsProcess() {
             displayGPSTime();
             
             // Actualización de métricas
+            // NUEVA LLAMADA: Calcular carga de entrenamiento
+            calculateTrainingLoad();
+            // Separator added after TRIMP
+            Serial.println("-----------------------------------------\n");
+            
+            // Continuación de la actualización de métricas
             updateDistance();
             calculateAcceleration();
             checkCourseChange();
@@ -360,9 +458,8 @@ void gpsProcess() {
             updateSpeedMetrics();
             updateAcceleration();
             estimateCadence();
-            calculateTrainingLoad();
         } else {
-            Serial.println("❌ Sin fix GPS\n");
+            Serial.println("❌ Datos GPS no válidos\n");
         }
     }
     
