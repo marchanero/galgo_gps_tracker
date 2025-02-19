@@ -430,7 +430,7 @@ void gpsProcess() {
             // Usar la corrección de altitud
             float rawAltitude = gps.altitude.meters();
             float correctedAltitude = adjustAltitude(rawAltitude, GEOID_OFFSET);
-            Serial.print("   🏔️ Altitud:  ");
+            Serial.print("   🏔️ Altitud :  ");
             Serial.print(correctedAltitude);
             Serial.println(" m");
             Serial.print("   🚀 Velocidad: ");
