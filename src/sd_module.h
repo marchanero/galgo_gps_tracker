@@ -21,4 +21,16 @@ bool createFileSD(const char* path);
 // Guarda (añade) diferentes datos en el fichero especificado.
 bool appendDataSD(const char* path, const char* data);
 
+// Guarda datos en formato CSV en el archivo especificado.
+bool appendDataCSV(const char* path, const char* data);
+
+// Declaración de la función para detectar interrupción por teclado.
+void handleKeyboardInterrupt();
+
+// NUEVA: Consulta si el sistema está pausado
+bool isSystemPaused();
+
+// NUEVA: Consulta si el sistema está terminado
+bool isSystemTerminated();
+
 #endif

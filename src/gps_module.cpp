@@ -263,6 +263,7 @@ float getFilteredSpeed(float newSpeed) {
 #define MEDIAN_FILTER_SIZE 5  // Número de muestras para el filtro de mediana
 float speedValues[MEDIAN_FILTER_SIZE] = {0};
 
+// Corrección en getMedianSpeed: uso correcto de std::sort
 float getMedianSpeed(float newSpeed) {
     // Desplazar los valores previos
     for (int i = MEDIAN_FILTER_SIZE - 1; i > 0; i--) {
@@ -271,8 +272,8 @@ float getMedianSpeed(float newSpeed) {
     speedValues[0] = newSpeed;
     float sorted[MEDIAN_FILTER_SIZE];
     memcpy(sorted, speedValues, sizeof(speedValues));
-    std::sort(sorted, speedValues + MEDIAN_FILTER_SIZE);
-    return sorted[MEDIAN_FILTER_SIZE / 2];  // Devuelve la mediana
+    std::sort(sorted, sorted + MEDIAN_FILTER_SIZE);
+    return sorted[MEDIAN_FILTER_SIZE / 2];
 }
 
 // Modificar updateSpeedMetrics para usar los filtros de velocidad
@@ -392,6 +393,7 @@ bool isValidGPSFix() {
     return true;
 }
 
+// Optimización de gpsProcess
 void gpsProcess() {
     // Leer datos del GPS
     while (gpsSerial.available()) {
@@ -404,10 +406,11 @@ void gpsProcess() {
     
     // Variables estáticas para detectar transición de FIX perdido a FIX obtenido
     static bool fixActive = false;
-    static unsigned long fixLostTime = start_time;  // Se usa start_time para el primer FIX
+    static unsigned long fixLostTime = start_time;
     
-    if (millis() - lastUpdate >= updateInterval) {
-        lastUpdate = millis();
+    unsigned long currentMillis = millis();
+    if (currentMillis - lastUpdate >= updateInterval) {
+        lastUpdate = currentMillis;
         Serial.println("\n===== 🛰️ DIAGNÓSTICO GPS =====\n");
         if (gps.satellites.isValid()) {
             int sats = gps.satellites.value();
@@ -419,13 +422,12 @@ void gpsProcess() {
                 Serial.println(String(hdop, 2));
             }
         }
-        unsigned long uptime = (millis() - start_time) / 1000;
+        unsigned long uptime = (currentMillis - start_time) / 1000;
         Serial.print("⏱️ Tiempo activo: ");
         Serial.print(uptime);
         Serial.println(" s\n");
         
-        if (isValidGPSFix()) {  // Se usa la validación de datos GPS
-            // Guardar configuración GPS en SD solo una vez
+        if (isValidGPSFix()) {
             static bool configSaved = false;
             if (!configSaved) {
                 String config;
@@ -442,10 +444,9 @@ void gpsProcess() {
                 }
             }
             
-            // Detectar transición: si recibiendo FIX después de no tenerlo, se guardan métricas adicionales
             if (!fixActive) {
                 fixActive = true;
-                unsigned long fixAcquisitionTime = millis() - fixLostTime;
+                unsigned long fixAcquisitionTime = currentMillis - fixLostTime;
                 String fixData;
                 fixData += "Hora: " + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()) + "\n";
                 fixData += "Latitud: " + String(gps.location.lat(), 6) + "\n";
@@ -468,7 +469,6 @@ void gpsProcess() {
                     Serial.println(fixData);
                 }
             }
-            // Continuación de la impresión del FIX actual
             double curLat = gps.location.lat();
             double curLon = gps.location.lng();
             Serial.println("✅ GPS FIX:");
@@ -480,7 +480,6 @@ void gpsProcess() {
             Serial.println(gps.satellites.value());
             Serial.print("   🔧 HDOP: ");
             Serial.println(String(gps.hdop.hdop(), 2));
-            // Usar la corrección de altitud
             float rawAltitude = gps.altitude.meters();
             float correctedAltitude = adjustAltitude(rawAltitude, GEOID_OFFSET);
             Serial.print("   🏔️ Altitud :  ");
@@ -493,16 +492,9 @@ void gpsProcess() {
             Serial.print(gps.course.deg(), 2);
             Serial.println("°\n");
 
-            // Mostrar la fecha y hora del GPS
             displayGPSTime();
-            
-            // Actualización de métricas
-            // NUEVA LLAMADA: Calcular carga de entrenamiento
             calculateTrainingLoad();
-            // Separator added after TRIMP
             Serial.println("-----------------------------------------\n");
-            
-            // Continuación de la actualización de métricas
             updateDistance();
             calculateAcceleration();
             checkCourseChange();
@@ -512,14 +504,12 @@ void gpsProcess() {
             updateAcceleration();
             estimateCadence();
         } else {
-            // Si el FIX no es válido, reiniciamos la bandera y actualizamos el tiempo de pérdida
             if (fixActive) {
                 fixActive = false;
             }
-            fixLostTime = millis();
+            fixLostTime = currentMillis;
             Serial.println("❌ Datos GPS no válidos\n");
         }
     }
-    
-    delay(100);
+    yield();
 }

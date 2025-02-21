@@ -7,6 +7,7 @@
 #include "bmp280_module.h"  // Asegúrate de incluir correctamente el módulo BMP280/AHT20
 #include <Adafruit_BMP280.h>
 #include <Adafruit_AHTX0.h>
+#include "sd_module.h"
 
 const uint16_t SAMPLE_RATE_MS = 100;  // Tasa de muestreo en milisegundos
 const uint8_t HISTORY_SIZE = 10;      // Tamaño del histórico para promedios
@@ -228,6 +229,18 @@ void setup() {
 }
 
 void loop() {
+    handleKeyboardInterrupt();
+    if (isSystemTerminated()) {
+        Serial.println("Programa finalizado.");
+        while (true) {
+            delay(100);
+        }
+    }
+    while (isSystemPaused()) {  // Si se ha detenido, espera a reanudar
+        handleKeyboardInterrupt();
+        delay(100);
+    }
+    
     static uint32_t last_update = millis();
     uint32_t current_time = millis();
     uint32_t dt_ms = current_time - last_update;
