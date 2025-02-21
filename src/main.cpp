@@ -43,7 +43,7 @@ void setup() {
     Serial.printf("SPI transfer enviado: 0x55, recibido: 0x%X\n", response);
     
     // Utilizamos la función de reintentos para montar la SD a baja velocidad (500 kHz)
-    if (!mountSD(VSPI_CS, vspi, 500000)) {
+    if (!mountSD(VSPI_CS, vspi, 1000000)) {
         Serial.println("⚠️ No se pudo montar la tarjeta SD");
         return;
     }
