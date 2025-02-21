@@ -2,6 +2,7 @@
 #include <math.h>  // Agregado para la fórmula de Haversine
 #include <algorithm>  // Añadido para std::sort
 #include <cstring>    // Añadido para memcpy
+#include "sd_module.h"  // Añadido para usar funciones del módulo SD
 
 #define RXD2 16  // Pin RX del GPS
 #define TXD2 17  // Pin TX del GPS
@@ -270,7 +271,7 @@ float getMedianSpeed(float newSpeed) {
     speedValues[0] = newSpeed;
     float sorted[MEDIAN_FILTER_SIZE];
     memcpy(sorted, speedValues, sizeof(speedValues));
-    std::sort(sorted, sorted + MEDIAN_FILTER_SIZE);
+    std::sort(sorted, speedValues + MEDIAN_FILTER_SIZE);
     return sorted[MEDIAN_FILTER_SIZE / 2];  // Devuelve la mediana
 }
 
@@ -401,6 +402,10 @@ void gpsProcess() {
     
     checkGPSReset();
     
+    // Variables estáticas para detectar transición de FIX perdido a FIX obtenido
+    static bool fixActive = false;
+    static unsigned long fixLostTime = start_time;  // Se usa start_time para el primer FIX
+    
     if (millis() - lastUpdate >= updateInterval) {
         lastUpdate = millis();
         Serial.println("\n===== 🛰️ DIAGNÓSTICO GPS =====\n");
@@ -420,6 +425,50 @@ void gpsProcess() {
         Serial.println(" s\n");
         
         if (isValidGPSFix()) {  // Se usa la validación de datos GPS
+            // Guardar configuración GPS en SD solo una vez
+            static bool configSaved = false;
+            if (!configSaved) {
+                String config;
+                config += "Fecha: " + String(gps.date.day()) + "/" + String(gps.date.month()) + "/" + String(gps.date.year()) + "\n";
+                config += "Hora: " + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()) + "\n";
+                config += "Satélites: " + String(gps.satellites.value()) + "\n";
+                config += "HDOP: " + String(gps.hdop.hdop(), 2) + "\n";
+                if (createFileSD("/gps_config.txt")) {
+                    appendDataSD("/gps_config.txt", config.c_str());
+                    Serial.println("✅ Configuración GPS guardada en SD.");
+                    configSaved = true;
+                } else {
+                    Serial.println("⚠️ Error al guardar la configuración GPS en SD.");
+                }
+            }
+            
+            // Detectar transición: si recibiendo FIX después de no tenerlo, se guardan métricas adicionales
+            if (!fixActive) {
+                fixActive = true;
+                unsigned long fixAcquisitionTime = millis() - fixLostTime;
+                String fixData;
+                fixData += "Hora: " + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()) + "\n";
+                fixData += "Latitud: " + String(gps.location.lat(), 6) + "\n";
+                fixData += "Longitud: " + String(gps.location.lng(), 6) + "\n";
+                fixData += "Satélites: " + String(gps.satellites.value()) + "\n";
+                fixData += "HDOP: " + String(gps.hdop.hdop(), 2) + "\n";
+                fixData += "Tiempo hasta FIX: " + String(fixAcquisitionTime) + " ms\n";
+                fixData += "--------------------------------\n";
+                static bool fileCreated = false;
+                if (!fileCreated) {
+                    if (createFileSD("/gps_fixes.txt")) {
+                        fileCreated = true;
+                    } else {
+                        Serial.println("⚠️ Error al crear el fichero de FIX GPS.");
+                    }
+                }
+                if (fileCreated) {
+                    appendDataSD("/gps_fixes.txt", fixData.c_str());
+                    Serial.println("✅ Fijación GPS guardada en SD para debug:");
+                    Serial.println(fixData);
+                }
+            }
+            // Continuación de la impresión del FIX actual
             double curLat = gps.location.lat();
             double curLon = gps.location.lng();
             Serial.println("✅ GPS FIX:");
@@ -427,6 +476,10 @@ void gpsProcess() {
             Serial.println(curLat, 6);
             Serial.print("   📍 Longitud: ");
             Serial.println(curLon, 6);
+            Serial.print("   📡 Satélites: ");
+            Serial.println(gps.satellites.value());
+            Serial.print("   🔧 HDOP: ");
+            Serial.println(String(gps.hdop.hdop(), 2));
             // Usar la corrección de altitud
             float rawAltitude = gps.altitude.meters();
             float correctedAltitude = adjustAltitude(rawAltitude, GEOID_OFFSET);
@@ -459,6 +512,11 @@ void gpsProcess() {
             updateAcceleration();
             estimateCadence();
         } else {
+            // Si el FIX no es válido, reiniciamos la bandera y actualizamos el tiempo de pérdida
+            if (fixActive) {
+                fixActive = false;
+            }
+            fixLostTime = millis();
             Serial.println("❌ Datos GPS no válidos\n");
         }
     }
