@@ -8,6 +8,7 @@
 #include <Adafruit_BMP280.h>
 #include <Adafruit_AHTX0.h>
 #include "sd_module.h"
+#include "oled_module.h"  // Nuevo include para el OLED
 
 const uint16_t SAMPLE_RATE_MS = 100;  // Tasa de muestreo en milisegundos
 const uint8_t HISTORY_SIZE = 10;      // Tamaño del histórico para promedios
@@ -213,10 +214,12 @@ void applyComplementaryFilter(float dt, const imu::Vector<3>& accel, const imu::
 void setup() {
     Serial.begin(115200);
     Serial.println("\n\n");
+    
     pinMode(LED_BUILTIN, OUTPUT);
     printCentered("Sistema de Orientación BNO055");
     Serial.println("\n");
     Wire.begin(26, 22);
+    
     delay(100);
     if (!initializeSensor()) {
         Serial.println("ERROR CRÍTICO: No se pudo inicializar el sensor");
@@ -226,6 +229,16 @@ void setup() {
     calibrateSensor();
     initBmpAht();
     gpsInit();
+    
+    // Mostrar pantalla de bienvenida en el OLED ajustada para 128x32
+    initOled();
+    display.clearDisplay();
+    display.setTextSize(2);             // Tipografía grande
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 8);            // Ajustar cursor para centrar verticalmente
+    display.println("Galgo Sport");
+    display.display();
+    delay(3000);  // Tiempo para visualizar el mensaje
 }
 
 void loop() {
