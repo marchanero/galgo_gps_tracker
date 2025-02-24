@@ -208,45 +208,7 @@ void showSplashScreen() {
 }
 
 void drawStatusBar() {
-    // Dibuja indicadores de estado en la línea superior
-    display.drawRect(0, 0, 128, 8, WHITE);
-    
-    // Batería
-    display.drawRect(2, 1, 10, 6, WHITE);
-    display.drawRect(12, 3, 2, 2, WHITE);
-    display.fillRect(2, 1, lastData.battery_level / 10, 6, WHITE);
-    
-    // Señal GPS
-    for(int i = 0; i < lastData.signal_strength; i++) {
-        display.fillRect(20 + (i*3), 6 - (i*2), 2, 1 + (i*2), WHITE);
-    }
-    
-    // Estado de sensores
-    display.drawCircle(40, 3, 2, WHITE);
-    if(lastData.imu_ok) display.fillCircle(40, 3, 2, WHITE);
-    
-    display.drawCircle(48, 3, 2, WHITE);
-    if(lastData.gps_ok) display.fillCircle(48, 3, 2, WHITE);
-    
-    display.drawCircle(56, 3, 2, WHITE);
-    if(lastData.env_ok) display.fillCircle(56, 3, 2, WHITE);
-    
-    display.drawCircle(64, 3, 2, WHITE);
-    if(lastData.sd_ok) display.fillCircle(64, 3, 2, WHITE);
-    
-    // Indicador de página actual (4 puntos a la derecha)
-    const int dotSpacing = 4;
-    const int dotRadius = 1;
-    const int startX = 120;
-    const int centerY = 4;
-    
-    for(int i = 0; i < 4; i++) {  // 4 páginas: IMU, GPS, COMPASS, ENV
-        if(i == currentPage) {
-            display.fillCircle(startX - (i * dotSpacing), centerY, dotRadius, WHITE);
-        } else {
-            display.drawCircle(startX - (i * dotSpacing), centerY, dotRadius, WHITE);
-        }
-    }
+    // Esta función se elimina o se deja vacía ya que no queremos la barra de estado
 }
 
 void drawTiltIndicator(float angle) {
@@ -292,12 +254,12 @@ void drawAccelBar(float accel) {
 void displayIMUPage() {
     display.setTextSize(1);
     
-    // Mostrar valores numéricos
-    display.setCursor(0, 10);
+    // Mostrar valores numéricos - Ahora empezando desde la parte superior
+    display.setCursor(0, 0);  // Cambiado de y=10 a y=0
     display.print("ACC:");
     display.print(lastData.accel_total, 1);
     
-    display.setCursor(0, 20);
+    display.setCursor(0, 10);  // Cambiado de y=20 a y=10
     display.print("GYR:");
     display.print(lastData.gyro_total, 1);
     
@@ -334,21 +296,21 @@ void drawCompass(float heading) {
 void displayGPSPage() {
     display.setTextSize(1);
     
-    // Mostrar coordenadas en la parte superior
-    display.setCursor(0, 10);
+    // Mostrar coordenadas empezando desde arriba
+    display.setCursor(0, 0);  // Cambiado de y=10 a y=0
     display.print("LAT:");
     display.println(lastData.latitude, 6);
     display.print("LON:");
     display.println(lastData.longitude, 6);
     
     // Mostrar velocidad y satélites
-    display.setCursor(0, 25);
+    display.setCursor(0, 20);  // Ajustado para mejor espaciado
     display.print("SPD:");
     display.print(lastData.speed, 1);
     display.print("km/h");
     
     // Mostrar satélites con icono
-    display.setCursor(70, 25);
+    display.setCursor(70, 20);
     display.print("SAT:");
     display.print(lastData.satellites);
 }
@@ -394,49 +356,137 @@ void displayCompassPage() {
     display.print("°");
 }
 
-void drawEnvBar(int x, int y, float value, float maxValue, const char* label) {
-    const int barWidth = 50;
-    const int barHeight = 6;
-    
-    // Dibujar etiqueta
-    display.setCursor(x, y);
-    display.print(label);
-    
-    // Dibujar valor
-    char buffer[10];
-    snprintf(buffer, sizeof(buffer), "%0.1f", value);
-    int valueWidth = strlen(buffer) * 6; // 6 píxeles por carácter aprox.
-    display.setCursor(x + barWidth + 5, y);
-    display.print(buffer);
-    
-    // Dibujar barra
-    display.drawRect(x, y + 2, barWidth, barHeight, WHITE);
-    int fillWidth = constrain((int)((value / maxValue) * barWidth), 0, barWidth);
-    display.fillRect(x, y + 2, fillWidth, barHeight, WHITE);
+void drawEnvIcon(int x, int y, uint8_t type) {
+    switch(type) {
+        case 0: // Temperatura
+            display.drawCircle(x + 2, y + 2, 2, WHITE);  // Círculo del termómetro
+            display.drawRect(x + 1, y + 4, 3, 4, WHITE); // Base del termómetro
+            break;
+        case 1: // Humedad
+            display.drawPixel(x + 2, y, WHITE);     // Gota - punta
+            display.drawLine(x + 1, y + 1, x + 3, y + 1, WHITE);
+            display.drawLine(x, y + 2, x + 4, y + 2, WHITE);
+            display.drawLine(x + 1, y + 3, x + 3, y + 3, WHITE);
+            display.drawPixel(x + 2, y + 4, WHITE); // Gota - base
+            break;
+        case 2: // Presión
+            display.drawRect(x, y, 5, 3, WHITE);    // Barómetro
+            display.drawLine(x + 2, y + 3, x + 2, y + 5, WHITE); // Indicador
+            break;
+    }
 }
 
 void displayEnvPage() {
     display.setTextSize(1);
     
-    // Temperatura (rango típico: -10 a 50°C)
-    drawEnvBar(5, 10, lastData.temperature, 50.0, "T:");
+    // Temperatura
+    drawEnvIcon(0, 2, 0);
+    display.setCursor(8, 0);
+    display.print(lastData.temperature, 1);
     display.print("C");
     
-    // Humedad (rango: 0-100%)
-    drawEnvBar(5, 20, lastData.humidity, 100.0, "H:");
+    // Mini gráfico para temperatura
+    const int tempX = 50;
+    const int tempY = 2;
+    const int tempWidth = SCREEN_WIDTH - tempX - 2;
+    const int tempHeight = 8;
+    display.drawRect(tempX, tempY, tempWidth, tempHeight, WHITE);
+    int tempFill = map(lastData.temperature, -10, 50, 0, tempWidth-2);
+    tempFill = constrain(tempFill, 0, tempWidth-2);
+    display.fillRect(tempX+1, tempY+1, tempFill, tempHeight-2, WHITE);
+    
+    // Humedad
+    drawEnvIcon(0, 13, 1);
+    display.setCursor(8, 11);
+    display.print(lastData.humidity, 0);
     display.print("%");
     
-    // Presión (rango típico: 900-1100 hPa, normalizado)
-    float normPressure = lastData.pressure - 900.0; // Normalizar para mejor visualización
-    drawEnvBar(5, 30, normPressure, 200.0, "P:");
+    // Barra de humedad con gotas
+    const int humX = 50;
+    const int humY = 13;
+    const int humWidth = SCREEN_WIDTH - humX - 2;
+    const int humHeight = 8;
+    display.drawRect(humX, humY, humWidth, humHeight, WHITE);
+    int humFill = map(lastData.humidity, 0, 100, 0, humWidth-2);
+    // Patrón de "gotas" en la barra de humedad
+    for(int i = 0; i < humFill; i += 2) {
+        display.drawPixel(humX + 1 + i, humY + 2, WHITE);
+        display.drawPixel(humX + 1 + i, humY + 5, WHITE);
+    }
+    
+    // Presión
+    drawEnvIcon(0, 24, 2);
+    display.setCursor(8, 22);
+    display.print(lastData.pressure, 0);
     display.print("hPa");
+    
+    // Indicador de tendencia de presión
+    const int presX = 50;
+    const int presY = 24;
+    const int presWidth = SCREEN_WIDTH - presX - 2;
+    const int presHeight = 8;
+    display.drawRect(presX, presY, presWidth, presHeight, WHITE);
+    int presFill = map(lastData.pressure, 900, 1100, 0, presWidth-2);
+    presFill = constrain(presFill, 0, presWidth-2);
+    // Patrón de líneas para la presión
+    for(int i = 0; i < presFill; i += 3) {
+        display.drawLine(presX + 1 + i, presY + 1, presX + 1 + i, presY + presHeight - 2, WHITE);
+    }
+}
+
+void displayGPSDetailPage() {
+    display.setTextSize(1);
+    
+    // Altura
+    display.setCursor(0, 0);
+    display.print("ALT:");
+    display.print(lastData.altitude, 1);
+    display.print("m");
+    
+    // Rumbo
+    display.setCursor(64, 0);
+    display.print("CRS:");
+    display.print(lastData.course, 0);
+    display.print("°");
+    
+    // Velocidad con barra gráfica
+    display.setCursor(0, 10);
+    display.print("SPD:");
+    display.print(lastData.speed, 1);
+    
+    // Barra de velocidad (0-100 km/h)
+    const int barX = 50;
+    const int barY = 11;
+    const int barWidth = SCREEN_WIDTH - barX - 2;
+    const int barHeight = 5;
+    display.drawRect(barX, barY, barWidth, barHeight, WHITE);
+    int speedFill = map(lastData.speed, 0, 100, 0, barWidth-2);
+    speedFill = constrain(speedFill, 0, barWidth-2);
+    display.fillRect(barX+1, barY+1, speedFill, barHeight-2, WHITE);
+    
+    // HDOP (precisión) y estado de fix
+    display.setCursor(0, 20);
+    display.print("HDOP:");
+    display.print(lastData.hdop, 1);
+    
+    // Indicador de calidad de señal
+    display.setCursor(64, 20);
+    display.print("FIX:");
+    if (lastData.fix) {
+        display.print("OK");
+        // Dibujar estrella si el fix es bueno
+        display.drawPixel(90, 21, WHITE);
+        display.drawPixel(88, 22, WHITE);
+        display.drawPixel(92, 22, WHITE);
+        display.drawPixel(90, 23, WHITE);
+    } else {
+        display.print("NO");
+    }
 }
 
 void updateDisplayData(const DisplayData& data) {
     lastData = data;
     display.clearDisplay();
-    
-    drawStatusBar();
     
     switch(currentPage) {
         case PAGE_IMU:
@@ -444,6 +494,9 @@ void updateDisplayData(const DisplayData& data) {
             break;
         case PAGE_GPS:
             displayGPSPage();
+            break;
+        case PAGE_GPS_DETAIL:
+            displayGPSDetailPage();
             break;
         case PAGE_COMPASS:
             displayCompassPage();
@@ -459,15 +512,14 @@ void updateDisplayData(const DisplayData& data) {
 }
 
 void nextPage() {
-    // Navegar entre las páginas principales (IMU, GPS, COMPASS, ENV)
-    currentPage = static_cast<DisplayPage>((currentPage + 1) % 4);
+    // Navegar entre las páginas incluyendo la nueva página de detalles GPS
+    currentPage = static_cast<DisplayPage>((currentPage + 1) % 5); // Ahora son 5 páginas
 }
 
 void previousPage() {
-    // Navegar entre las páginas principales (IMU, GPS, COMPASS, ENV)
     int prevPage = (currentPage - 1);
     if (prevPage < 0) {
-        prevPage = 3;  // Volver a la última página (ENV)
+        prevPage = 4;  // Ahora son 5 páginas (0-4)
     }
     currentPage = static_cast<DisplayPage>(prevPage);
 }

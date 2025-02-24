@@ -589,6 +589,13 @@ void loop() {
         displayData.signal_strength = gps.satellites.value() > 8 ? 4 :
                                     gps.satellites.value() > 6 ? 3 :
                                     gps.satellites.value() > 4 ? 2 : 1;
+
+        // Añadir los nuevos campos de GPS
+        displayData.altitude = gps.altitude.meters();
+        displayData.course = gps.course.deg();
+        displayData.hdop = gps.hdop.hdop();
+        displayData.datetime = gps.time.value();
+        displayData.fix = gps.location.isValid() && gps.altitude.isValid();
         
         updateDisplayData(displayData);
         

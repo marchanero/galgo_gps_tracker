@@ -10,14 +10,11 @@
 #define OLED_RESET    -1 // Pin de reset (no usado)
 #define OLED_ADDRESS  0x3C // Dirección I2C típica
 
-// Colores para el display monocromático
-#define BLACK 0
-#define WHITE 1
-
 // Páginas de visualización
 enum DisplayPage {
     PAGE_IMU,      // Datos IMU (aceleración, orientación)
     PAGE_GPS,      // Datos GPS (posición, velocidad)
+    PAGE_GPS_DETAIL, // Detalles adicionales del GPS
     PAGE_COMPASS,  // Brújula y dirección
     PAGE_ENV,      // Datos ambientales (temp, presión, humedad)
     PAGE_STATUS,   // Estado del sistema (SD, sensores)
@@ -68,6 +65,13 @@ struct DisplayData {
     float speed;
     int satellites;
     
+    // Añadir nuevos campos para detalles GPS
+    float altitude;     // Altura sobre el nivel del mar
+    float course;       // Rumbo en grados
+    float hdop;        // Precisión horizontal
+    uint32_t datetime; // Timestamp GPS
+    bool fix;          // Si tiene fix GPS
+    
     // Datos ambientales
     float temperature;
     float pressure;
@@ -86,5 +90,8 @@ struct DisplayData {
 
 // Función para actualizar todos los datos
 void updateDisplayData(const DisplayData& data);
+
+// Declaración externa de la función
+extern const char* getCompassDirection(float heading);
 
 #endif // OLED_MODULE_H
