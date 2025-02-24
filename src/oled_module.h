@@ -10,10 +10,15 @@
 #define OLED_RESET    -1 // Pin de reset (no usado)
 #define OLED_ADDRESS  0x3C // Dirección I2C típica
 
+// Colores para el display monocromático
+#define BLACK 0
+#define WHITE 1
+
 // Páginas de visualización
 enum DisplayPage {
     PAGE_IMU,      // Datos IMU (aceleración, orientación)
     PAGE_GPS,      // Datos GPS (posición, velocidad)
+    PAGE_COMPASS,  // Brújula y dirección
     PAGE_ENV,      // Datos ambientales (temp, presión, humedad)
     PAGE_STATUS,   // Estado del sistema (SD, sensores)
     PAGE_COUNT     // Número total de páginas
@@ -25,6 +30,12 @@ extern Adafruit_SSD1306 display;
 void initOled();
 void clearDisplay();
 void updateDisplay();
+void showSplashScreen();
+
+// Funciones de splash screen
+void showSplashLogo();
+void showInitProgress(const char* status, int progress);
+bool isInitScreenDone();
 
 // Funciones de visualización por página
 void showIMUPage(float accel, float gyro, float tilt);

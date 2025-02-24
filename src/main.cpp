@@ -103,7 +103,12 @@ bool checkCalibration() {
 bool initializeSensor() {
     DeviceConfig& config = ConfigManager::getConfig();
     uint8_t attempts = 0;
+    
     while (attempts < config.max_init_attempts) {
+        char status[32];
+        snprintf(status, sizeof(status), "IMU Init (%d/%d)", attempts + 1, config.max_init_attempts);
+        showInitProgress(status, 40 + (attempts * 5)); // Progreso de 40% a 55%
+        
         if (bno.begin()) {
             bno.setExtCrystalUse(true);
             sensorState.is_initialized = true;
@@ -111,14 +116,22 @@ bool initializeSensor() {
             // Cargar calibración previa si existe
             if (ConfigManager::loadCalibration()) {
                 Serial.println("Calibración previa cargada");
+                showInitProgress("Cargando calibración...", 55);
+                delay(500);
             }
             
+            showInitProgress("IMU Iniciado!", 60);
+            delay(500);
             return true;
         }
+        
         Serial.println(F("Error al inicializar BNO055. Reintentando..."));
-        delay(1000);
+        delay(500);
         attempts++;
     }
+    
+    showInitProgress("Error IMU!", 50);
+    delay(1000);
     return false;
 }
 
@@ -175,13 +188,33 @@ void calibrateSensor() {
     
     Serial.println("Calibrando sensor...");
     uint32_t calibrationStart = millis();
+    uint32_t lastDisplayUpdate = 0;
+    const uint32_t displayUpdateInterval = 250; // Actualizar display cada 250ms
+    
     while (!checkCalibration() && (millis() - calibrationStart < config.calibration_timeout_ms)) {
-        digitalWrite(LED_BUILTIN, HIGH);
-        delay(250);
-        digitalWrite(LED_BUILTIN, LOW);
-        delay(250);
-        Serial.print(".");
+        uint32_t currentTime = millis();
+        
+        // Parpadeo del LED
+        digitalWrite(LED_BUILTIN, (currentTime / 250) % 2);
+        
+        // Actualizar display con progreso
+        if (currentTime - lastDisplayUpdate >= displayUpdateInterval) {
+            uint8_t sys, gyro, accel, mag;
+            bno.getCalibration(&sys, &gyro, &accel, &mag);
+            
+            char status[32];
+            snprintf(status, sizeof(status), "Cal: S%d G%d A%d M%d", sys, gyro, accel, mag);
+            
+            int progress = ((sys + gyro + accel + mag) * 100) / (4 * 3); // 3 es calibración máxima
+            showInitProgress(status, 60 + (progress * 20) / 100); // Mapear 0-100 a 60-80
+            
+            lastDisplayUpdate = currentTime;
+            Serial.print(".");
+        }
+        
+        delay(10);
     }
+    
     uint32_t elapsed = millis() - calibrationStart;
     uint32_t hours   = elapsed / 3600000;
     uint32_t minutes = (elapsed % 3600000) / 60000;
@@ -189,16 +222,20 @@ void calibrateSensor() {
     
     if (!checkCalibration()) {
         Serial.println("\nERROR: Tiempo de calibración agotado.");
+        showInitProgress("Error de calibración", 70);
     } else {
         Serial.println("\nSensor calibrado.");
         updateSystemState(); // Esto guardará la calibración
+        showInitProgress("IMU Calibrado!", 80);
     }
+    
     Serial.print("Tiempo de calibración: ");
     Serial.print(hours);   Serial.print("h ");
     Serial.print(minutes); Serial.print("m ");
     Serial.print(seconds); Serial.println("s");
     
     digitalWrite(LED_BUILTIN, HIGH);
+    delay(500);
 }
 
 const char* getCompassDirection(float heading) {
@@ -228,44 +265,58 @@ void setup() {
     Serial.println("\n\n");
     
     pinMode(LED_BUILTIN, OUTPUT);
-    printCentered("Sistema de Orientación BNO055");
-    Serial.println("\n");
     
-    // Inicializar ConfigManager antes que nada
+    // Inicializar I2C y OLED primero
+    Wire.begin(26, 22);
+    delay(100);
+    
+    // Mostrar logo inicial con animación
+    initOled();
+    delay(1500); // Mantener el logo visible
+    
+    // Inicializar componentes básicos
+    showInitProgress("Iniciando Config...", 10);
     if (!ConfigManager::initialize()) {
         Serial.println("ERROR CRÍTICO: No se pudo inicializar la configuración");
         while (1) delay(10);
     }
-    Serial.println("Configuración cargada correctamente");
+    delay(300); // Pausa para mostrar el progreso
     
-    // Inicializar SessionManager
-    if (!SessionManager::initialize()) {
-        Serial.println("ERROR CRÍTICO: No se pudo inicializar el gestor de sesiones");
+    showInitProgress("Iniciando Session...", 20);
+    if (!SessionManager::initialize() || !SessionManager::createNewSession()) {
+        Serial.println("ERROR CRÍTICO: No se pudo inicializar las sesiones");
         while (1) delay(10);
     }
+    delay(300);
     
-    // Crear nueva sesión
-    if (!SessionManager::createNewSession()) {
-        Serial.println("ERROR CRÍTICO: No se pudo crear una nueva sesión");
-        while (1) delay(10);
-    }
-    Serial.printf("Nueva sesión creada en: %s\n", SessionManager::getCurrentSessionPath());
-    
-    Wire.begin(26, 22);
-    delay(100);
-    
+    // Inicializar sensores
+    showInitProgress("Iniciando IMU...", 40);
     if (!initializeSensor()) {
         Serial.println("ERROR CRÍTICO: No se pudo inicializar el sensor");
         while (1) delay(10);
     }
-    printCentered("Sensor Inicializado Correctamente");
+    delay(300);
     
-    calibrateSensor();
-    initBmpAht();
-    gpsInit();
+    showInitProgress("Calibrando IMU...", 60);
+    calibrateSensor(); // Esta función ya incluye animación de progreso
     
-    // Inicializar OLED y mostrar pantalla de inicio
-    initOled();  // Ahora incluye la pantalla de inicio con logo
+    showInitProgress("Iniciando BMP/AHT...", 80);
+    initBmpAht(); // Esta función ya incluye animación de progreso
+    
+    showInitProgress("Iniciando GPS...", 90);
+    gpsInit(); // Esta función ya incluye animación de progreso
+    
+    // Efecto final de completado
+    showInitProgress("Sistema Listo!", 100);
+    delay(500);
+    
+    // Parpadeo final
+    for(int i = 0; i < 3; i++) {
+        display.invertDisplay(true);
+        delay(100);
+        display.invertDisplay(false);
+        delay(100);
+    }
 }
 
 String formatIMUData(uint32_t timestamp, const imu::Vector<3>& accel, const imu::Vector<3>& gyro,

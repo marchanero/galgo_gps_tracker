@@ -1,4 +1,5 @@
 #include "bmp280_module.h"
+#include "oled_module.h"
 
 // Declaración de objetos para BMP280 y AHT20
 Adafruit_BMP280 bmp;    // Objeto para BMP280
@@ -12,15 +13,32 @@ float aht_humidity = 0.0f;
 
 void initBmpAht() {
     Serial.println("Inicializando sensores BMP280 y AHT20...");
+    
+    // Inicializar BMP280
+    showInitProgress("Iniciando BMP280...", 80);
     if (!bmp.begin(0x77)) {
         Serial.println("No se encontró BMP280. Verifique el cableado.");
+        showInitProgress("Error BMP280!", 80);
+        delay(1000);
         while (true) delay(10);
     }
+    showInitProgress("BMP280 OK!", 85);
+    delay(300);
+    
+    // Inicializar AHT20
+    showInitProgress("Iniciando AHT20...", 85);
     if (!aht.begin()) {
         Serial.println("No se encontró AHT20. Verifique el cableado.");
+        showInitProgress("Error AHT20!", 85);
+        delay(1000);
         while (true) delay(10);
     }
+    showInitProgress("AHT20 OK!", 90);
+    delay(300);
+    
     Serial.println("Sensores BMP280 y AHT20 inicializados correctamente.");
+    showInitProgress("Sensores OK!", 90);
+    delay(500);
 }
 
 void readBmpAhtData() {

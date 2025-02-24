@@ -3,6 +3,7 @@
 #include <algorithm>  // Añadido para std::sort
 #include <cstring>    // Añadido para memcpy
 #include "sd_module.h"  // Añadido para usar funciones del módulo SD
+#include "oled_module.h" // Añadido para mostrar progreso en pantalla
 
 #define RXD2 16  // Pin RX del GPS
 #define TXD2 17  // Pin TX del GPS
@@ -116,20 +117,34 @@ void configureGPS() {
 }
 
 void gpsInit() {
+    showInitProgress("Iniciando GPS...", 90);
     Serial.println("\n🛰️ Configurando GPS para máxima recepción...");
+    
+    // Configurar buffer y puerto serie
     gpsSerial.setRxBufferSize(1024);
     gpsSerial.begin(9600, SERIAL_8N1, RXD2, TXD2);
     delay(100);
+    
+    showInitProgress("Config. buffer GPS...", 92);
+    delay(200);
+    
+    // Calibrar variables
+    calibrateGPSVariables();
+    showInitProgress("Calibrando GPS...", 94);
+    delay(200);
+    
+    // Configurar GPS para mejor rendimiento
+    configureGPS();
+    showInitProgress("Optimizando GPS...", 96);
+    delay(200);
+    
     gpsConfigured = true;
-    Serial.println("✅ Configuración GPS completada");
     start_time = millis();
     lastGoodSignal = millis();
     
-    // Calibrar variables del GPS
-    calibrateGPSVariables();
-    
-    // Configurar el GPS para acelerar la fijación y mejorar precisión
-    configureGPS();
+    Serial.println("✅ Configuración GPS completada");
+    showInitProgress("GPS listo!", 98);
+    delay(300);
 }
 
 static bool checkSignalQuality() {
