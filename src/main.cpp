@@ -19,25 +19,9 @@
 const float GRAVITY_EARTH = 9.80665F; // Constante de gravedad terrestre
 bool debug_bno055 = false; // Flag para modo debug. Si es true, se omite la calibración
 
-struct SensorHistory {
-    float* accel_magnitude;
-    float* gyro_magnitude;
-    uint8_t index;
-    float accel_avg;
-    float gyro_avg;
-    
-    SensorHistory() : index(0), accel_avg(0.0f), gyro_avg(0.0f) {
-        uint8_t size = ConfigManager::getConfig().history_size;
-        accel_magnitude = new float[size]();
-        gyro_magnitude = new float[size]();
-    }
-    
-    ~SensorHistory() {
-        delete[] accel_magnitude;
-        delete[] gyro_magnitude;
-    }
-};
-SensorHistory sensorHistory;
+#include "circular_buffer.h"
+
+IMUHistory imuHistory;
 
 struct DerivedData {
     float total_acceleration;
@@ -103,17 +87,7 @@ float calculateMagnitude(const imu::Vector<3>& vec) {
 }
 
 void updateHistory(float accel_mag, float gyro_mag) {
-    uint8_t history_size = ConfigManager::getConfig().history_size;
-    sensorHistory.accel_magnitude[sensorHistory.index] = accel_mag;
-    sensorHistory.gyro_magnitude[sensorHistory.index] = gyro_mag;
-    float accel_sum = 0, gyro_sum = 0;
-    for(int i = 0; i < history_size; i++) {
-        accel_sum += sensorHistory.accel_magnitude[i];
-        gyro_sum += sensorHistory.gyro_magnitude[i];
-    }
-    sensorHistory.accel_avg = accel_sum / history_size;
-    sensorHistory.gyro_avg = gyro_sum / history_size;
-    sensorHistory.index = (sensorHistory.index + 1) % history_size;
+    imuHistory.update(accel_mag, gyro_mag);
 }
 
 bool checkCalibration() {
@@ -290,15 +264,8 @@ void setup() {
     initBmpAht();
     gpsInit();
     
-    // Mostrar pantalla de bienvenida en el OLED ajustada para 128x32
-    initOled();
-    display.clearDisplay();
-    display.setTextSize(2);             // Tipografía grande
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 8);            // Ajustar cursor para centrar verticalmente
-    display.println("Galgo Sport");
-    display.display();
-    delay(3000);  // Tiempo para visualizar el mensaje
+    // Inicializar OLED y mostrar pantalla de inicio
+    initOled();  // Ahora incluye la pantalla de inicio con logo
 }
 
 String formatIMUData(uint32_t timestamp, const imu::Vector<3>& accel, const imu::Vector<3>& gyro,
@@ -356,6 +323,21 @@ void loop() {
         float dt = dt_ms / 1000.0f;
         last_update = current_time;
         updateSystemState();
+        
+        // Inicializar filtros Kalman
+        static bool kalmanInitialized = false;
+        static KalmanFilter kfTotalAccel, kfAngularVel, kfTilt;
+        if (!kalmanInitialized) {
+            DeviceConfig& config = ConfigManager::getConfig();
+            kfTotalAccel.x = derivedData.total_acceleration;
+            kfTotalAccel.P = 1.0f; kfTotalAccel.Q = config.kalman_q; kfTotalAccel.R = config.kalman_r;
+            kfAngularVel.x = derivedData.angular_velocity;
+            kfAngularVel.P = 1.0f; kfAngularVel.Q = config.kalman_q; kfAngularVel.R = config.kalman_r;
+            kfTilt.x = derivedData.tilt_angle;
+            kfTilt.P = 1.0f; kfTilt.Q = config.kalman_q; kfTilt.R = config.kalman_r;
+            kalmanInitialized = true;
+        }
+        
         sensors_event_t event;
         bno.getEvent(&event);
         if (sensorState.system_status == 0) {
@@ -393,26 +375,15 @@ void loop() {
             }
             Serial.print("📏 Inclinación Dinámica: "); Serial.print(dynamicTilt, 4); Serial.println("°");
         }
-        {
-            static bool kalmanInitialized = false;
-            static KalmanFilter kfTotalAccel, kfAngularVel, kfTilt;
-            if (!kalmanInitialized) {
-                DeviceConfig& config = ConfigManager::getConfig();
-                kfTotalAccel.x = derivedData.total_acceleration;
-                kfTotalAccel.P = 1.0f; kfTotalAccel.Q = config.kalman_q; kfTotalAccel.R = config.kalman_r;
-                kfAngularVel.x = derivedData.angular_velocity;
-                kfAngularVel.P = 1.0f; kfAngularVel.Q = config.kalman_q; kfAngularVel.R = config.kalman_r;
-                kfTilt.x = derivedData.tilt_angle;
-                kfTilt.P = 1.0f; kfTilt.Q = config.kalman_q; kfTilt.R = config.kalman_r;
-                kalmanInitialized = true;
-            }
-            float kalmanTotalAccel = kalmanUpdate(&kfTotalAccel, derivedData.total_acceleration);
-            float kalmanAngularVel = kalmanUpdate(&kfAngularVel, derivedData.angular_velocity);
-            float kalmanTilt       = kalmanUpdate(&kfTilt, derivedData.tilt_angle);
-            Serial.print("🔎 Kalman Total Accel: "); Serial.print(kalmanTotalAccel, 4); Serial.println(" m/s²");
-            Serial.print("🔎 Kalman Angular Vel: "); Serial.print(kalmanAngularVel, 4); Serial.println(" rad/s");
-            Serial.print("🔎 Kalman Tilt: "); Serial.print(kalmanTilt, 4); Serial.println("°");
-        }
+        // Calcular y actualizar valores Kalman
+        float kalmanTotalAccel = kalmanUpdate(&kfTotalAccel, derivedData.total_acceleration);
+        float kalmanAngularVel = kalmanUpdate(&kfAngularVel, derivedData.angular_velocity);
+        float kalmanTilt = kalmanUpdate(&kfTilt, derivedData.tilt_angle);
+
+        // Imprimir datos Kalman
+        Serial.print("🔎 Kalman Total Accel: "); Serial.print(kalmanTotalAccel, 4); Serial.println(" m/s²");
+        Serial.print("🔎 Kalman Angular Vel: "); Serial.print(kalmanAngularVel, 4); Serial.println(" rad/s");
+        Serial.print("🔎 Kalman Tilt: "); Serial.print(kalmanTilt, 4); Serial.println("°");
         {
             DeviceConfig& config = ConfigManager::getConfig();
             static KalmanFilter kfVelX = {config.kalman_q, config.kalman_r, kalman_velocity_x, P_vel};
@@ -512,10 +483,10 @@ void loop() {
         Serial.print(", Y: ");           Serial.print(gravity.y(), 4); Serial.print(" m/s²");
         Serial.print(", Z: ");           Serial.print(gravity.z(), 4); Serial.println(" m/s²");
         Serial.print("📊 Total Accel: ");      Serial.print(derivedData.total_acceleration, 4);
-        Serial.print(" m/s² (Avg: ");           Serial.print(sensorHistory.accel_avg, 4);
+        Serial.print(" m/s² (Avg: ");           Serial.print(imuHistory.getAccelAvg(), 4);
         Serial.println(" m/s²)");
         Serial.print("🌀 Angular Vel: ");      Serial.print(derivedData.angular_velocity, 4);
-        Serial.print(" rad/s (Avg: ");          Serial.print(sensorHistory.gyro_avg, 4);
+        Serial.print(" rad/s (Avg: ");          Serial.print(imuHistory.getGyroAvg(), 4);
         Serial.println(" rad/s)");
         Serial.print("📐 Tilt Angle: ");       Serial.print(derivedData.tilt_angle, 4); Serial.println("°");
         Serial.print("🔀 Quaternion: W: ");    Serial.print(quat.w(), 4);
@@ -542,5 +513,39 @@ void loop() {
             aht_humidity
         );
         SessionManager::logEnvironmentalData(envData);
+
+        // Actualizar datos en pantalla OLED
+        DisplayData displayData;
+        displayData.accel_total = kalmanTotalAccel;
+        displayData.gyro_total = kalmanAngularVel;
+        displayData.tilt_angle = kalmanTilt;
+        
+        displayData.latitude = gps.location.lat();
+        displayData.longitude = gps.location.lng();
+        displayData.speed = gps.speed.kmph();
+        displayData.satellites = gps.satellites.value();
+        
+        displayData.temperature = (bmp_temperature + aht_temperature) / 2.0f;
+        displayData.pressure = bmp_pressure;
+        displayData.humidity = aht_humidity;
+        
+        displayData.sd_ok = true;  // Ya verificado en SessionManager
+        displayData.imu_ok = sensorState.is_calibrated;
+        displayData.gps_ok = gps.location.isValid();
+        displayData.env_ok = true;  // Asumimos que está bien si llegamos aquí
+        
+        displayData.battery_level = 100;  // TODO: Implementar medición de batería
+        displayData.signal_strength = gps.satellites.value() > 8 ? 4 :
+                                    gps.satellites.value() > 6 ? 3 :
+                                    gps.satellites.value() > 4 ? 2 : 1;
+        
+        updateDisplayData(displayData);
+        
+        // Cambiar página cada 3 segundos
+        static uint32_t last_page_change = 0;
+        if (current_time - last_page_change > 3000) {
+            nextPage();
+            last_page_change = current_time;
+        }
     }
 }
