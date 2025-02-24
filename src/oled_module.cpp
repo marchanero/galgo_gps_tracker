@@ -4,6 +4,57 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 static DisplayPage currentPage = PAGE_IMU;
 static DisplayData currentData = {0};
 
+// Logo de Galgo Sport (32x32 píxeles)
+const unsigned char PROGMEM logo_bmp[] = {
+    0x00, 0x7F, 0xFE, 0x00,
+    0x01, 0xFF, 0xFF, 0x80,
+    0x03, 0xFF, 0xFF, 0xC0,
+    0x07, 0xC0, 0x03, 0xE0,
+    0x0F, 0x00, 0x00, 0xF0,
+    0x1E, 0x00, 0x00, 0x78,
+    0x3C, 0x00, 0x00, 0x3C,
+    0x38, 0x00, 0x00, 0x1C,
+    0x70, 0x00, 0x00, 0x0E,
+    0x70, 0x00, 0x00, 0x0E,
+    0xE0, 0x00, 0x00, 0x07,
+    0xE0, 0x00, 0x00, 0x07,
+    0xE0, 0x00, 0x00, 0x07,
+    0xE0, 0x00, 0x00, 0x07,
+    0xE0, 0x00, 0x00, 0x07,
+    0xE0, 0x00, 0x00, 0x07,
+    0xE0, 0x00, 0x00, 0x07,
+    0xE0, 0x00, 0x00, 0x07,
+    0x70, 0x00, 0x00, 0x0E,
+    0x70, 0x00, 0x00, 0x0E,
+    0x38, 0x00, 0x00, 0x1C,
+    0x3C, 0x00, 0x00, 0x3C,
+    0x1E, 0x00, 0x00, 0x78,
+    0x0F, 0x00, 0x00, 0xF0,
+    0x07, 0xC0, 0x03, 0xE0,
+    0x03, 0xFF, 0xFF, 0xC0,
+    0x01, 0xFF, 0xFF, 0x80,
+    0x00, 0x7F, 0xFE, 0x00
+};
+
+void showSplashScreen() {
+    display.clearDisplay();
+    
+    // Dibujar logo en el centro
+    display.drawBitmap(
+        (SCREEN_WIDTH - 32) / 2,
+        0,
+        logo_bmp, 32, 32, 1);
+    
+    // Configurar texto
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor((SCREEN_WIDTH - 54) / 2, SCREEN_HEIGHT - 8);
+    display.println("Galgo Sport");
+    
+    display.display();
+    delay(2000);
+}
+
 void initOled() {
     if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
         Serial.println(F("SSD1306 allocation failed"));
@@ -12,7 +63,9 @@ void initOled() {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.display();
+    
+    // Mostrar pantalla de inicio
+    showSplashScreen();
 }
 
 void clearDisplay() {
@@ -21,7 +74,6 @@ void clearDisplay() {
 }
 
 void drawHeader(const char* title) {
-    display.drawLine(0, 8, SCREEN_WIDTH, 8, SSD1306_WHITE);
     display.setTextSize(1);
     display.setCursor(2, 0);
     display.print(title);
@@ -32,7 +84,6 @@ void drawHeader(const char* title) {
 }
 
 void drawFooter(const char* status) {
-    display.drawLine(0, SCREEN_HEIGHT-9, SCREEN_WIDTH, SCREEN_HEIGHT-9, SSD1306_WHITE);
     display.setTextSize(1);
     display.setCursor(2, SCREEN_HEIGHT-8);
     display.print(status);
@@ -65,22 +116,23 @@ void showIMUPage(float accel, float gyro, float tilt) {
     drawHeader("IMU Data");
     
     display.setCursor(2, 10);
-    display.print("Acc: ");
+    display.print("Acc:");
     display.print(accel, 1);
-    display.print(" m/s2");
+    display.print("m/s2");
     
     display.setCursor(2, 19);
-    display.print("Gyr: ");
+    display.print("Gyr:");
     display.print(gyro, 1);
-    display.print(" rad/s");
+    display.print("r/s");
+    
+    char footer[32];
+    snprintf(footer, sizeof(footer), "Tilt:%.1f deg", tilt);
+    drawFooter(footer);
     
     // Barra de inclinación
     int tiltBar = map(constrain(tilt, -90, 90), -90, 90, 0, 100);
-    drawProgressBar(64, 12, 60, 8, tiltBar);
+    drawProgressBar(80, 19, 45, 6, tiltBar);
     
-    char footer[32];
-    snprintf(footer, sizeof(footer), "Tilt: %.1f deg", tilt);
-    drawFooter(footer);
     display.display();
 }
 
@@ -90,19 +142,20 @@ void showGPSPage(float lat, float lon, float speed, int sats) {
     
     display.setCursor(2, 10);
     display.print(lat, 6);
-    display.print(", ");
-    display.print(lon, 6);
+    display.print((char)247);
     
     display.setCursor(2, 19);
-    display.print(speed, 1);
-    display.print(" km/h  Sats:");
-    display.print(sats);
+    display.print(lon, 6);
+    display.print((char)247);
     
     // Barra de precisión basada en satélites
     int satBar = map(constrain(sats, 0, 12), 0, 12, 0, 100);
-    drawProgressBar(64, 12, 60, 8, satBar);
+    drawProgressBar(80, 19, 45, 6, satBar);
     
-    drawFooter(sats >= 4 ? "Fix 3D" : "No Fix");
+    char footer[32];
+    snprintf(footer, sizeof(footer), "%.1fkm/h Sats:%d", speed, sats);
+    drawFooter(footer);
+    
     display.display();
 }
 
@@ -117,22 +170,23 @@ void showEnvPage(float temp, float pressure, float humidity) {
     display.print("hPa");
     
     display.setCursor(2, 19);
-    display.print("Hum: ");
+    display.print("Hum:");
     display.print(humidity, 1);
     display.print("%");
     
     // Barra de humedad
-    drawProgressBar(64, 12, 60, 8, humidity);
+    drawProgressBar(80, 19, 45, 6, humidity);
     
     char footer[32];
-    snprintf(footer, sizeof(footer), "Alt: %.0fm", pressure/100*8.43);
+    snprintf(footer, sizeof(footer), "Alt:%.0fm", pressure/100*8.43);
     drawFooter(footer);
+    
     display.display();
 }
 
 void showStatusPage(bool sdOk, bool imuOk, bool gpsOk, bool envOk) {
     display.clearDisplay();
-    drawHeader("System Status");
+    drawHeader("Status");
     
     display.setCursor(2, 10);
     display.print("SD:");
@@ -146,8 +200,10 @@ void showStatusPage(bool sdOk, bool imuOk, bool gpsOk, bool envOk) {
     display.print(" ENV:");
     display.print(envOk ? "OK" : "ERR");
     
-    String status = String("Err:") + String(!sdOk + !imuOk + !gpsOk + !envOk);
-    drawFooter(status.c_str());
+    char footer[32];
+    snprintf(footer, sizeof(footer), "Errors:%d", !sdOk + !imuOk + !gpsOk + !envOk);
+    drawFooter(footer);
+    
     display.display();
 }
 

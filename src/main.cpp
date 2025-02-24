@@ -264,15 +264,8 @@ void setup() {
     initBmpAht();
     gpsInit();
     
-    // Mostrar pantalla de bienvenida en el OLED ajustada para 128x32
-    initOled();
-    display.clearDisplay();
-    display.setTextSize(2);             // Tipografía grande
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 8);            // Ajustar cursor para centrar verticalmente
-    display.println("Galgo Sport");
-    display.display();
-    delay(3000);  // Tiempo para visualizar el mensaje
+    // Inicializar OLED y mostrar pantalla de inicio
+    initOled();  // Ahora incluye la pantalla de inicio con logo
 }
 
 String formatIMUData(uint32_t timestamp, const imu::Vector<3>& accel, const imu::Vector<3>& gyro,
