@@ -1,4 +1,5 @@
 #include "session_manager.h"
+#include "storage_manager.h"
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,7 +15,8 @@ const char* SessionManager::GPS_HEADER = "timestamp,latitude,longitude,altitude,
 const char* SessionManager::ENV_HEADER = "timestamp,temperature,pressure,humidity";
 
 bool SessionManager::initialize() {
-    return initSDModule();
+    if (!initSDModule()) return false;
+    return StorageManager::initialize();
 }
 
 void SessionManager::generateSessionName(char* buffer, size_t size) {
@@ -96,6 +98,12 @@ bool SessionManager::endSession() {
         return true;
     }
     
+    // Asegurar que todos los datos en caché se escriban a la SD
+    if (!StorageManager::flush()) {
+        Serial.println("Error: No se pudo hacer flush de los datos");
+        return false;
+    }
+    
     isSessionActive = false;
     return true;
 }
@@ -104,25 +112,19 @@ bool SessionManager::logIMUData(const char* data) {
     if (!isSessionActive) return false;
     char path[128];
     getIMULogPath(path, sizeof(path));
-    char dataWithNewline[256];
-    snprintf(dataWithNewline, sizeof(dataWithNewline), "%s\n", data);
-    return appendDataSD(path, dataWithNewline);
+    return StorageManager::writeData(path, data);
 }
 
 bool SessionManager::logGPSData(const char* data) {
     if (!isSessionActive) return false;
     char path[128];
     getGPSLogPath(path, sizeof(path));
-    char dataWithNewline[256];
-    snprintf(dataWithNewline, sizeof(dataWithNewline), "%s\n", data);
-    return appendDataSD(path, dataWithNewline);
+    return StorageManager::writeData(path, data);
 }
 
 bool SessionManager::logEnvironmentalData(const char* data) {
     if (!isSessionActive) return false;
     char path[128];
     getEnvLogPath(path, sizeof(path));
-    char dataWithNewline[256];
-    snprintf(dataWithNewline, sizeof(dataWithNewline), "%s\n", data);
-    return appendDataSD(path, dataWithNewline);
+    return StorageManager::writeData(path, data);
 }
