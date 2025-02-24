@@ -4,29 +4,40 @@
 #include <Adafruit_Sensor.h>
 #include "utility/imumaths.h"
 #include "gps_module.h"
-#include "bmp280_module.h"  // Asegúrate de incluir correctamente el módulo BMP280/AHT20
+#include "bmp280_module.h"
 #include <Adafruit_BMP280.h>
 #include <Adafruit_AHTX0.h>
 #include "sd_module.h"
+#include "oled_module.h"
+#include "config_manager.h"
+#include "session_manager.h"
+#include <FS.h>
+#include <SD.h>
+#include <SPI.h>
+#include <time.h>
 
-const uint16_t SAMPLE_RATE_MS = 100;  // Tasa de muestreo en milisegundos
-const uint8_t HISTORY_SIZE = 10;      // Tamaño del histórico para promedios
 const float GRAVITY_EARTH = 9.80665F; // Constante de gravedad terrestre
-const uint8_t CALIBRATION_THRESHOLD = 2; // Umbral mínimo de calibración
-const uint8_t MAX_INIT_ATTEMPTS = 3;    // Máximo número de intentos de inicialización
-const uint32_t CALIBRATION_TIMEOUT_MS = 30000; // 30 segundos de tiempo máximo de calibración
 bool debug_bno055 = false; // Flag para modo debug. Si es true, se omite la calibración
 
-const float COMPLEMENTARY_ALPHA = 0.98f;
-
 struct SensorHistory {
-    float accel_magnitude[HISTORY_SIZE];
-    float gyro_magnitude[HISTORY_SIZE];
+    float* accel_magnitude;
+    float* gyro_magnitude;
     uint8_t index;
     float accel_avg;
     float gyro_avg;
+    
+    SensorHistory() : index(0), accel_avg(0.0f), gyro_avg(0.0f) {
+        uint8_t size = ConfigManager::getConfig().history_size;
+        accel_magnitude = new float[size]();
+        gyro_magnitude = new float[size]();
+    }
+    
+    ~SensorHistory() {
+        delete[] accel_magnitude;
+        delete[] gyro_magnitude;
+    }
 };
-SensorHistory sensorHistory = {{0}, {0}, 0, 0.0f, 0.0f};
+SensorHistory sensorHistory;
 
 struct DerivedData {
     float total_acceleration;
@@ -60,13 +71,6 @@ struct Position {
 };
 Position position = {0.0f, 0.0f, 0.0f};
 
-struct MagCalibrationOffset {
-    float x;
-    float y;
-    float z;
-};
-MagCalibrationOffset magOffset = {0.0f, 0.0f, 0.0f}; // Ajustar con valores de calibración
-
 struct KalmanFilter {
     float Q; // Variancia del proceso
     float R; // Variancia de la medición
@@ -85,7 +89,6 @@ float kalmanUpdate(KalmanFilter *kf, float measurement) {
 static float kalman_velocity_x = 0.0f, kalman_velocity_y = 0.0f, kalman_velocity_z = 0.0f;
 static float kalman_position_x = 0.0f, kalman_position_y = 0.0f, kalman_position_z = 0.0f;
 static float P_vel = 1.0f, P_pos = 1.0f;
-const float kalman_R = 0.1f, kalman_Q = 0.001f;
 
 void printCentered(const char* text) {
     Serial.println(text);
@@ -100,33 +103,42 @@ float calculateMagnitude(const imu::Vector<3>& vec) {
 }
 
 void updateHistory(float accel_mag, float gyro_mag) {
+    uint8_t history_size = ConfigManager::getConfig().history_size;
     sensorHistory.accel_magnitude[sensorHistory.index] = accel_mag;
     sensorHistory.gyro_magnitude[sensorHistory.index] = gyro_mag;
     float accel_sum = 0, gyro_sum = 0;
-    for(int i = 0; i < HISTORY_SIZE; i++) {
+    for(int i = 0; i < history_size; i++) {
         accel_sum += sensorHistory.accel_magnitude[i];
         gyro_sum += sensorHistory.gyro_magnitude[i];
     }
-    sensorHistory.accel_avg = accel_sum / HISTORY_SIZE;
-    sensorHistory.gyro_avg = gyro_sum / HISTORY_SIZE;
-    sensorHistory.index = (sensorHistory.index + 1) % HISTORY_SIZE;
+    sensorHistory.accel_avg = accel_sum / history_size;
+    sensorHistory.gyro_avg = gyro_sum / history_size;
+    sensorHistory.index = (sensorHistory.index + 1) % history_size;
 }
 
 bool checkCalibration() {
     uint8_t sys, gyro, accel, mag;
     bno.getCalibration(&sys, &gyro, &accel, &mag);
-    return (sys >= CALIBRATION_THRESHOLD && 
-            gyro >= CALIBRATION_THRESHOLD && 
-            accel >= CALIBRATION_THRESHOLD && 
-            mag >= CALIBRATION_THRESHOLD);
+    DeviceConfig& config = ConfigManager::getConfig();
+    return (sys >= config.calibration_threshold &&
+            gyro >= config.calibration_threshold &&
+            accel >= config.calibration_threshold &&
+            mag >= config.calibration_threshold);
 }
 
 bool initializeSensor() {
+    DeviceConfig& config = ConfigManager::getConfig();
     uint8_t attempts = 0;
-    while (attempts < MAX_INIT_ATTEMPTS) {
+    while (attempts < config.max_init_attempts) {
         if (bno.begin()) {
             bno.setExtCrystalUse(true);
             sensorState.is_initialized = true;
+            
+            // Cargar calibración previa si existe
+            if (ConfigManager::loadCalibration()) {
+                Serial.println("Calibración previa cargada");
+            }
+            
             return true;
         }
         Serial.println(F("Error al inicializar BNO055. Reintentando..."));
@@ -145,7 +157,30 @@ void updateSystemState() {
         sensorState.error_count++;
     }
     
+    // Verificar calibración y guardarla si es válida
+    bool was_calibrated = sensorState.is_calibrated;
     sensorState.is_calibrated = checkCalibration();
+    
+    if (!was_calibrated && sensorState.is_calibrated) {
+        // Si acabamos de calibrar, guardar los datos
+        uint8_t sys, gyro, accel, mag;
+        bno.getCalibration(&sys, &gyro, &accel, &mag);
+        
+        SensorCalibration cal;
+        cal.sys_cal = sys;
+        cal.gyro_cal = gyro;
+        cal.accel_cal = accel;
+        cal.mag_cal = mag;
+        
+        // Obtener offsets del magnetómetro
+        imu::Vector<3> mag_data = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
+        cal.mag_offset_x = mag_data.x();
+        cal.mag_offset_y = mag_data.y();
+        cal.mag_offset_z = mag_data.z();
+        
+        ConfigManager::saveCalibration(cal);
+        Serial.println("Nueva calibración guardada");
+    }
 }
 
 void displayTemperature() {
@@ -162,9 +197,11 @@ void calibrateSensor() {
         return;
     }
     
+    DeviceConfig& config = ConfigManager::getConfig();
+    
     Serial.println("Calibrando sensor...");
     uint32_t calibrationStart = millis();
-    while (!checkCalibration() && (millis() - calibrationStart < CALIBRATION_TIMEOUT_MS)) {
+    while (!checkCalibration() && (millis() - calibrationStart < config.calibration_timeout_ms)) {
         digitalWrite(LED_BUILTIN, HIGH);
         delay(250);
         digitalWrite(LED_BUILTIN, LOW);
@@ -180,6 +217,7 @@ void calibrateSensor() {
         Serial.println("\nERROR: Tiempo de calibración agotado.");
     } else {
         Serial.println("\nSensor calibrado.");
+        updateSystemState(); // Esto guardará la calibración
     }
     Serial.print("Tiempo de calibración: ");
     Serial.print(hours);   Serial.print("h ");
@@ -204,7 +242,8 @@ const char* getCompassDirection(float heading) {
 void applyComplementaryFilter(float dt, const imu::Vector<3>& accel, const imu::Vector<3>& gyro) {
     static float filteredTilt = 0.0f;
     float accelTilt = atan2(accel.z(), sqrt(accel.x()*accel.x() + accel.y()*accel.y())) * 180.0 / PI;
-    filteredTilt = COMPLEMENTARY_ALPHA * (filteredTilt + gyro.x() * dt) + (1.0f - COMPLEMENTARY_ALPHA) * accelTilt;
+    float alpha = ConfigManager::getConfig().complementary_alpha;
+    filteredTilt = alpha * (filteredTilt + gyro.x() * dt) + (1.0f - alpha) * accelTilt;
     Serial.print("📏 Inclinación Complementaria: ");
     Serial.print(filteredTilt, 4);
     Serial.println("°");
@@ -213,25 +252,92 @@ void applyComplementaryFilter(float dt, const imu::Vector<3>& accel, const imu::
 void setup() {
     Serial.begin(115200);
     Serial.println("\n\n");
+    
     pinMode(LED_BUILTIN, OUTPUT);
     printCentered("Sistema de Orientación BNO055");
     Serial.println("\n");
+    
+    // Inicializar ConfigManager antes que nada
+    if (!ConfigManager::initialize()) {
+        Serial.println("ERROR CRÍTICO: No se pudo inicializar la configuración");
+        while (1) delay(10);
+    }
+    Serial.println("Configuración cargada correctamente");
+    
+    // Inicializar SessionManager
+    if (!SessionManager::initialize()) {
+        Serial.println("ERROR CRÍTICO: No se pudo inicializar el gestor de sesiones");
+        while (1) delay(10);
+    }
+    
+    // Crear nueva sesión
+    if (!SessionManager::createNewSession()) {
+        Serial.println("ERROR CRÍTICO: No se pudo crear una nueva sesión");
+        while (1) delay(10);
+    }
+    Serial.printf("Nueva sesión creada en: %s\n", SessionManager::getCurrentSessionPath());
+    
     Wire.begin(26, 22);
     delay(100);
+    
     if (!initializeSensor()) {
         Serial.println("ERROR CRÍTICO: No se pudo inicializar el sensor");
         while (1) delay(10);
     }
     printCentered("Sensor Inicializado Correctamente");
+    
     calibrateSensor();
     initBmpAht();
     gpsInit();
+    
+    // Mostrar pantalla de bienvenida en el OLED ajustada para 128x32
+    initOled();
+    display.clearDisplay();
+    display.setTextSize(2);             // Tipografía grande
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 8);            // Ajustar cursor para centrar verticalmente
+    display.println("Galgo Sport");
+    display.display();
+    delay(3000);  // Tiempo para visualizar el mensaje
+}
+
+String formatIMUData(uint32_t timestamp, const imu::Vector<3>& accel, const imu::Vector<3>& gyro,
+                    const imu::Vector<3>& mag, const imu::Quaternion& quat) {
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f",
+             timestamp,
+             accel.x(), accel.y(), accel.z(),
+             gyro.x(), gyro.y(), gyro.z(),
+             mag.x(), mag.y(), mag.z(),
+             quat.w(), quat.x(), quat.y(), quat.z());
+    return String(buffer);
+}
+
+String formatGPSData() {
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f,%f,%d,%f",
+             millis(),
+             gps.location.lat(), gps.location.lng(),
+             gps.altitude.meters(),
+             gps.speed.kmph(),
+             gps.satellites.value(),
+             gps.hdop.hdop());
+    return String(buffer);
+}
+
+String formatEnvironmentalData(float temp, float pressure, float humidity) {
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f",
+             millis(),
+             temp, pressure, humidity);
+    return String(buffer);
 }
 
 void loop() {
     handleKeyboardInterrupt();
     if (isSystemTerminated()) {
         Serial.println("Programa finalizado.");
+        SessionManager::endSession();
         while (true) {
             delay(100);
         }
@@ -245,7 +351,8 @@ void loop() {
     uint32_t current_time = millis();
     uint32_t dt_ms = current_time - last_update;
     
-    if (dt_ms >= SAMPLE_RATE_MS) {
+    DeviceConfig& config = ConfigManager::getConfig();
+    if (dt_ms >= config.sample_rate_ms) {
         float dt = dt_ms / 1000.0f;
         last_update = current_time;
         updateSystemState();
@@ -281,7 +388,8 @@ void loop() {
                 dynamicTilt = accelTilt;
                 initDynamic = false;
             } else {
-                dynamicTilt = 0.98f * (dynamicTilt + gyro.x() * dt) + 0.02f * accelTilt;
+                float alpha = ConfigManager::getConfig().complementary_alpha;
+                dynamicTilt = alpha * (dynamicTilt + gyro.x() * dt) + (1.0f - alpha) * accelTilt;
             }
             Serial.print("📏 Inclinación Dinámica: "); Serial.print(dynamicTilt, 4); Serial.println("°");
         }
@@ -289,12 +397,13 @@ void loop() {
             static bool kalmanInitialized = false;
             static KalmanFilter kfTotalAccel, kfAngularVel, kfTilt;
             if (!kalmanInitialized) {
+                DeviceConfig& config = ConfigManager::getConfig();
                 kfTotalAccel.x = derivedData.total_acceleration;
-                kfTotalAccel.P = 1.0f; kfTotalAccel.Q = 0.01f; kfTotalAccel.R = 0.1f;
+                kfTotalAccel.P = 1.0f; kfTotalAccel.Q = config.kalman_q; kfTotalAccel.R = config.kalman_r;
                 kfAngularVel.x = derivedData.angular_velocity;
-                kfAngularVel.P = 1.0f; kfAngularVel.Q = 0.01f; kfAngularVel.R = 0.1f;
+                kfAngularVel.P = 1.0f; kfAngularVel.Q = config.kalman_q; kfAngularVel.R = config.kalman_r;
                 kfTilt.x = derivedData.tilt_angle;
-                kfTilt.P = 1.0f; kfTilt.Q = 0.01f; kfTilt.R = 0.1f;
+                kfTilt.P = 1.0f; kfTilt.Q = config.kalman_q; kfTilt.R = config.kalman_r;
                 kalmanInitialized = true;
             }
             float kalmanTotalAccel = kalmanUpdate(&kfTotalAccel, derivedData.total_acceleration);
@@ -305,12 +414,13 @@ void loop() {
             Serial.print("🔎 Kalman Tilt: "); Serial.print(kalmanTilt, 4); Serial.println("°");
         }
         {
-            static KalmanFilter kfVelX = {kalman_Q, kalman_R, kalman_velocity_x, P_vel};
-            static KalmanFilter kfVelY = {kalman_Q, kalman_R, kalman_velocity_y, P_vel};
-            static KalmanFilter kfVelZ = {kalman_Q, kalman_R, kalman_velocity_z, P_vel};
-            static KalmanFilter kfPosX = {kalman_Q, kalman_R, kalman_position_x, P_pos};
-            static KalmanFilter kfPosY = {kalman_Q, kalman_R, kalman_position_y, P_pos};
-            static KalmanFilter kfPosZ = {kalman_Q, kalman_R, kalman_position_z, P_pos};
+            DeviceConfig& config = ConfigManager::getConfig();
+            static KalmanFilter kfVelX = {config.kalman_q, config.kalman_r, kalman_velocity_x, P_vel};
+            static KalmanFilter kfVelY = {config.kalman_q, config.kalman_r, kalman_velocity_y, P_vel};
+            static KalmanFilter kfVelZ = {config.kalman_q, config.kalman_r, kalman_velocity_z, P_vel};
+            static KalmanFilter kfPosX = {config.kalman_q, config.kalman_r, kalman_position_x, P_pos};
+            static KalmanFilter kfPosY = {config.kalman_q, config.kalman_r, kalman_position_y, P_pos};
+            static KalmanFilter kfPosZ = {config.kalman_q, config.kalman_r, kalman_position_z, P_pos};
             kalmanUpdate(&kfVelX, accel.x() * dt);
             kalman_velocity_x = kfVelX.x;
             kalmanUpdate(&kfVelY, accel.y() * dt);
@@ -379,9 +489,10 @@ void loop() {
         Serial.print(", Y: ");               Serial.print(mag.y(), 4); Serial.print(" uT");
         Serial.print(", Z: ");               Serial.print(mag.z(), 4); Serial.println(" uT");
         {
-            float corrMagX = mag.x() - magOffset.x;
-            float corrMagY = mag.y() - magOffset.y;
-            float corrMagZ = mag.z() - magOffset.z;
+            DeviceConfig& config = ConfigManager::getConfig();
+            float corrMagX = mag.x() - config.mag_offset.x;
+            float corrMagY = mag.y() - config.mag_offset.y;
+            float corrMagZ = mag.z() - config.mag_offset.z;
             float corrMagStrength = sqrt(corrMagX*corrMagX + corrMagY*corrMagY + corrMagZ*corrMagZ);
             Serial.print("📡 Magnetómetro compensado X: "); Serial.print(corrMagX, 4); Serial.print(" uT");
             Serial.print(", Y: "); Serial.print(corrMagY, 4); Serial.print(" uT");
@@ -412,7 +523,24 @@ void loop() {
         Serial.print(" Y: ");                Serial.print(quat.y(), 4);
         Serial.print(" Z: ");                Serial.println(quat.z(), 4);
         Serial.println("=========================================\n");
-        readBmpAhtData();
+        // Guardar datos del IMU
+        String imuData = formatIMUData(current_time, accel, gyro, mag, quat);
+        SessionManager::logIMUData(imuData);
+
+        // Guardar datos GPS
         gpsProcess();
+        if (gps.location.isValid()) {
+            String gpsData = formatGPSData();
+            SessionManager::logGPSData(gpsData);
+        }
+
+        // Guardar datos ambientales
+        readBmpAhtData();
+        String envData = formatEnvironmentalData(
+            (bmp_temperature + aht_temperature) / 2.0f, // Promedio de ambos sensores
+            bmp_pressure,
+            aht_humidity
+        );
+        SessionManager::logEnvironmentalData(envData);
     }
 }
