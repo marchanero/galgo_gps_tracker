@@ -4,6 +4,12 @@
 Adafruit_BMP280 bmp;    // Objeto para BMP280
 Adafruit_AHTX0 aht;     // Objeto para AHT20
 
+// Definición de variables globales
+float bmp_temperature = 0.0f;
+float bmp_pressure = 0.0f;
+float aht_temperature = 0.0f;
+float aht_humidity = 0.0f;
+
 void initBmpAht() {
     Serial.println("Inicializando sensores BMP280 y AHT20...");
     if (!bmp.begin(0x77)) {
@@ -18,12 +24,15 @@ void initBmpAht() {
 }
 
 void readBmpAhtData() {
-    float bmp_temperature = bmp.readTemperature();
-    float bmp_pressure = bmp.readPressure() / 100.0F; // Presión en hPa
+    // Leer datos del BMP280
+    bmp_temperature = bmp.readTemperature();
+    bmp_pressure = bmp.readPressure() / 100.0F; // Presión en hPa
+    
+    // Leer datos del AHT20
     sensors_event_t aht_h, aht_t;
     aht.getEvent(&aht_h, &aht_t);
-    float aht_temperature = aht_t.temperature;
-    float aht_humidity = aht_h.relative_humidity;
+    aht_temperature = aht_t.temperature;
+    aht_humidity = aht_h.relative_humidity;
     
     Serial.println("========== Datos BMP280 & AHT20 ==========");
     Serial.println();
