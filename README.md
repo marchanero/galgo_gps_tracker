@@ -1,114 +1,209 @@
-# 🚀 GPS Tracker
+# 🚀 GPS Tracker y Sistema de Análisis de Movimiento
 
-Un sistema de seguimiento GPS integrado con sensores múltiples y funcionalidades avanzadas.
-
----
-
-## 📌 Descripción del Proyecto
-
-Este proyecto implementa un sistema de seguimiento GPS utilizando Arduino. Entre sus funcionalidades se destacan:
-
-- **Configuración GPS:**  
-  Inicializa y configura el módulo GPS para optimizar la recepción de señales mediante comandos específicos.
-- **Diagnóstico y análisis:**  
-  Monitorea la calidad de la señal (satélites, HDOP) y procesa datos de posicionamiento, aceleración y altitud.
-- **Visualización interactiva:**  
-  Muestra datos en tiempo real en el monitor serie y en una pantalla OLED.
-- **Escaneo I2C:**  
-  Detecta y lista los dispositivos conectados en el bus I2C.
+## 📌 Resumen del Sistema
+Sistema integrado de seguimiento GPS y análisis de movimiento con sensores múltiples (IMU, GPS, ambientales) y procesamiento avanzado de señales.
 
 ---
 
-## 🗂️ Estructura del Proyecto
-
-| Componente          | Descripción                                                                 | Archivo(s)                                                           |
-|---------------------|-----------------------------------------------------------------------------|----------------------------------------------------------------------|
-| **Main**            | Inicializa hardware, procesa datos y gestiona la comunicación serial        | `/src/main.cpp`                                                      |
-| **GPS Module**      | Configura y procesa datos del módulo GPS                                    | `/src/gps_module.h`, `/src/gps_module.cpp`                             |
-| **Data Logging**    | Registra y guarda datos en SD en formato CSV                                | `/src/gps_data_logger.h`, `/src/gps_data_logger.cpp`                   |
-| **Ambiental Sensor**| Lee y muestra datos de sensores BMP280 y AHT20                              | `/src/bmp280_module.h`, `/src/bmp280_module.cpp`                       |
-| **Env Data Logger** | Guarda datos ambientales en CSV                                             | `/src/env_data_logger.h`, `/src/env_data_logger.cpp`                   |
+## 🎯 Objetivos del Sistema
+1. Captura precisa de movimiento y posición
+2. Análisis ambiental completo
+3. Procesamiento en tiempo real de señales
+4. Almacenamiento eficiente de datos
+5. Organización automática de sesiones
 
 ---
 
-## 🔧 Funcionalidades Avanzadas
+## 🔧 Arquitectura del Sistema
 
-- **📡 Configuración Automática del GPS:**  
-  La función `configureGPS` ajusta la tasa de actualización y limita las sentencias NMEA para mejorar la precisión.
+### 1. Módulos Hardware
+- **IMU (BNO055)**
+  - Acelerómetro: ±2g, ±4g, ±8g, ±16g
+  - Giroscopio: ±250, ±500, ±1000, ±2000 °/s
+  - Magnetómetro: ±1300µT (x,y), ±2500µT (z)
   
-- **📊 Análisis Visual de Datos:**  
-  Uso de filtros (promedio móvil y mediana) para suavizar la velocidad, y la implementación de filtros de Kalman para obtener estimaciones más precisas.
+- **GPS (NEO-6M)**
+  - Precisión posición: 2.5m CEP
+  - Velocidad: 0.1 m/s
+  - TTFF: 27s cold start
+  
+- **Sensores Ambientales**
+  - BMP280: -40 a +85°C, 300-1100 hPa
+  - AHT20: 0-100% RH, ±2% precisión
 
-- **📝 Registro de Datos:**  
-  Se usa el módulo SD para almacenar la configuración y los datos fijos del GPS, además de los registros ambientales que son guardados en formato CSV siguiendo el estándar 8.3.
+### 2. Sistema de Almacenamiento
+```
+/sd/sessions/
+└── YYYYMMDD_HHMMSS/
+    ├── imu_data.csv
+    ├── gps_data.csv
+    └── env_data.csv
+```
 
-- **🎛️ Interfaz de Usuario Mejorada:**  
-  A través del monitor serie se despliegan mensajes informativos y diagnósticos en tiempo real, apoyados por iconos y mensajes claros.
-
----
-
-## 📏 Métricas Utilizadas
-
-El sistema registra diversas métricas para monitorear el estado y el rendimiento tanto del módulo GPS como de los sensores ambientales y de movimiento. Estas métricas se utilizan para diagnosticar el estado del sensor, validar la calidad de la señal y optimizar el procesamiento de los datos.
-
-| Métrica                    | Descripción                                                     | Unidad       |
-|----------------------------|-----------------------------------------------------------------|--------------|
-| **Calibración**            | Estado de calibración del sensor (umbral superado u omitido)     | Sí/No        |
-| **HDOP**                   | Precisión horizontal de la señal GPS                             | Valor numérico (menor es mejor) |
-| **Satélites**              | Número de satélites conectados para la medición                  | Número       |
-| **Aceleración Total**      | Magnitud de la aceleración calculada a partir de sensores         | m/s²         |
-| **Velocidad Angular**      | Magnitud de la velocidad angular                                | rad/s        |
-| **Inclinación**            | Ángulo de inclinación obtenido con filtros complementarios        | °            |
-| **Distancia Total**        | Distancia acumulada calculada con fórmula de Haversine            | m            |
-| **Velocidad Filtrada**     | Velocidad suavizada utilizando filtros (promedio móvil/mediana)     | km/h         |
-| **Aceleración Suavizada**  | Variación de velocidad suavizada para eliminar saltos de medición  | m/s²         |
-
----
-
-## 📊 Métricas Calculadas y Procesamiento de Señales
-
-El sistema no solo registra métricas brutas, sino que también realiza cálculos avanzados y aplican filtros para mejorar la calidad de los datos. Se utilizan técnicas de filtrado como el filtro Complementario para inclinación, filtros de Kalman para la estimación de aceleraciones, velocidades y posiciones, y métodos de mediana y promedio móvil para suavizar la velocidad capturada.
-
-| Procesamiento/Filtro       | Función                                                            | Descripción                                                                            |
-|----------------------------|---------------------------------------------------------------------|----------------------------------------------------------------------------------------|
-| **Complementary Filter**   | Estima la inclinación combinando acelerómetro y giroscopio            | Combina datos de ambos sensores para reducir errores de medición                       |
-| **Filtro de Kalman**       | Suaviza mediciones de aceleración, velocidad y posición               | Reduce el ruido y optimiza la estimación mediante un modelo estadístico                   |
-| **Promedio Móvil**         | Suavizado de velocidad                                              | Calcula la media de muestras recientes para eliminar fluctuaciones bruscas              |
-| **Filtro de Mediana**      | Filtrado para eliminar outliers en la velocidad                      | Ordena muestras y toma el valor central para minimizar el impacto de valores atípicos      |
+### 3. Configuración de Pines
+- **SD Card**
+  - CS: 5
+  - SCK: 18
+  - MISO: 19
+  - MOSI: 23
+  
+- **I2C Bus**
+  - SDA: 26
+  - SCL: 22
 
 ---
 
-## 🛠️ Modificaciones Recientes
+## 📊 Procesamiento y Análisis de Datos
 
-Se han realizado las siguientes mejoras al proyecto:
+### 1. Datos IMU
+#### Datos Brutos (imu_data.csv)
+```csv
+timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,quat_w,quat_x,quat_y,quat_z
+```
 
-- **Estilos y Formato Mejorado:**  
-  Se han agregado títulos, iconos y tablas para una mejor comprensión y visualización de la información.
-- **Optimización del Código:**  
-  Se refactorizó la lectura y el registro de datos del GPS, así como la integración de sensores ambientales.
-- **Documentación Ampliada:**  
-  Se añadió una sección de "Modificaciones" y se actualizó la tabla de componentes para reflejar la estructura actual del proyecto.
+#### Datos Procesados
+- **Aceleración Total**: √(ax² + ay² + az²)
+- **Velocidad Angular**: √(gx² + gy² + gz²)
+- **Fuerza Magnética**: √(mx² + my² + mz²)
+- **Orientación**: Quaternion → Ángulos de Euler
+
+#### Filtros Aplicados
+1. **Kalman para Aceleración**
+   - Q = 0.1 (varianza proceso)
+   - R = 0.1 (varianza medición)
+   - Reduce ruido y suaviza señal
+
+2. **Complementario para Inclinación**
+   - α = 0.96 (peso giroscopio)
+   - 1-α = 0.04 (peso acelerómetro)
+   - Fusiona datos para mejor precisión
+
+### 2. Datos GPS
+#### Datos Brutos (gps_data.csv)
+```csv
+timestamp,latitude,longitude,altitude,speed,satellites,hdop
+```
+
+#### Datos Procesados
+- **Velocidad Filtrada**: Media móvil 5 muestras
+- **Distancia**: Fórmula Haversine
+- **Precisión**: Factor HDOP × 2.5m
+
+#### Filtros Aplicados
+1. **Media Móvil para Velocidad**
+   - Ventana: 5 muestras
+   - Elimina picos y suaviza cambios
+
+2. **Filtro de Mediana**
+   - Ventana: 3 muestras
+   - Elimina outliers
+
+### 3. Datos Ambientales
+#### Datos Brutos (env_data.csv)
+```csv
+timestamp,temperature,pressure,humidity
+```
+
+#### Datos Procesados
+- **Temperatura**: Promedio BMP280/AHT20
+- **Altitud Barométrica**: f(presión)
+- **Punto de Rocío**: f(temp, humidity)
 
 ---
 
-## ⚙️ Cómo Utilizar
+## 💾 Sistema de Almacenamiento
 
-1. **Conexiones:**  
-   Conecta el módulo GPS, sensores I2C y la pantalla OLED conforme al esquema del hardware.
-2. **Carga del Código:**  
-   Sube el código a la placa Arduino.
-3. **Monitoreo:**  
-   Verifica la salida en el monitor serie y en la pantalla OLED para validar el diagnóstico y la configuración.
-4. **Revisión de Registros:**  
-   Consulta los archivos CSV en la tarjeta SD para analizar los datos registrados.
+### 1. Buffer y Optimización
+- **Tamaño Buffer**: 4KB
+- **Flush Automático**: 5 segundos
+- **Rotación**: 10MB por archivo
+- **Backups**: 5 rotaciones máximo
+
+### 2. Estructura de Sesiones
+- Directorio por timestamp
+- Archivos CSV independientes
+- Headers automáticos
+- Comprobación de espacio
+
+### 3. Gestión de Errores
+- Verificación de escrituras
+- Recuperación automática
+- Log de errores
+- Backup en fallo
 
 ---
 
-## ℹ️ Notas Adicionales
+## 📈 Métricas y Calibración
 
-- Revisa y adapta la configuración de pines y parámetros (baudrate, I2C, etc.) a tu hardware específico.
-- Se recomienda validar el checksum de los comandos enviados al GPS para asegurar su correcto funcionamiento.
-- El proyecto usa formatos compatibles con sistemas embebidos y el almacenamiento SD siguiendo el estándar 8.3.
+### 1. IMU
+- **Calibración**
+  - Sistema: 3/3
+  - Giroscopio: 3/3
+  - Acelerómetro: 3/3
+  - Magnetómetro: 3/3
+
+- **Deriva**
+  - Giroscopio: <0.1°/s
+  - Magnetómetro: Compensación offset
+
+### 2. GPS
+- **Calidad Señal**
+  - HDOP < 2.0
+  - Satélites > 6
+  - Fix 3D
+
+### 3. Sensores Ambientales
+- **Precisión**
+  - Temperatura: ±0.5°C
+  - Presión: ±1 hPa
+  - Humedad: ±2% RH
+
+---
+
+## 🛠️ Configuración y Uso
+
+### 1. Inicialización
+```cpp
+void setup() {
+    ConfigManager::initialize();  // Carga config
+    SessionManager::initialize(); // Inicia sesión
+    initSensors();              // Configura sensores
+}
+```
+
+### 2. Captura de Datos
+```cpp
+void loop() {
+    if (newDataAvailable()) {
+        processIMUData();    // Procesa IMU
+        processGPSData();    // Procesa GPS
+        processEnvData();    // Procesa ambientales
+        logData();          // Guarda datos
+    }
+}
+```
+
+### 3. Análisis de Datos
+- Exportación CSV
+- Compatibilidad Excel/Python
+- Formato timestamp Unix
+- Headers descriptivos
+
+---
+
+## 📝 Notas de Desarrollo
+- Verificar calibración antes de uso
+- Mantener buffer SD < 75%
+- Revisar logs periódicamente
+- Actualizar offsets magnéticos
+
+---
+
+## 🔄 Actualizaciones Futuras
+- Interfaz web tiempo real
+- Compresión de datos
+- Machine Learning local
+- Batería con backup
 
 ---
 
