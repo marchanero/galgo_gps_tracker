@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <WiFi.h>
+#include <esp_now.h>
 #include <Adafruit_BNO055.h>
 #include <Adafruit_Sensor.h>
 #include "utility/imumaths.h"
@@ -21,7 +23,10 @@ bool debug_bno055 = false; // Flag para modo debug. Si es true, se omite la cali
 
 #include "circular_buffer.h"
 
+
 IMUHistory imuHistory;
+
+uint8_t gatewayMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // Envío broadcast
 
 struct DerivedData {
     float total_acceleration;
@@ -223,10 +228,63 @@ void applyComplementaryFilter(float dt, const imu::Vector<3>& accel, const imu::
     Serial.println("°");
 }
 
+String getDeviceID() {
+    String mac = WiFi.macAddress();  
+    mac.replace(":", "");            
+    // Tomamos los últimos 8 caracteres
+    return mac.substring(mac.length() - 8);
+}
+
+String buildSensorPayload() {
+    unsigned long timestamp = millis();
+    String deviceID = getDeviceID();
+    
+    // Se asume que ya se han actualizado las variables globales y llamados a gpsProcess(), readBmpAhtData(), etc.
+    String imuData = formatIMUData(timestamp, 
+                                   bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL),
+                                   bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE),
+                                   bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER),
+                                   bno.getQuat());
+    
+    String gpsData = "";
+    gpsProcess();
+    if (gps.location.isValid()) {
+        gpsData = formatGPSData();
+    }
+    
+    readBmpAhtData();
+    String envData = formatEnvironmentalData((bmp_temperature + aht_temperature) / 2.0f,
+                                               bmp_pressure,
+                                               aht_humidity);
+    
+    String payload = "{";
+    payload += "\"device_id\":\"" + deviceID + "\",";
+    payload += "\"timestamp\":" + String(timestamp) + ",";
+    payload += "\"imu\":{\"data\":\"" + imuData + "\"},";
+    payload += "\"gps\":{\"data\":\"" + gpsData + "\"},";
+    payload += "\"env\":{\"data\":\"" + envData + "\"}";
+    payload += "}";
+    return payload;
+}
+
+void sendDataToGateway(const String &data) {
+    int result = esp_now_send(gatewayMAC, (uint8_t*)data.c_str(), data.length());
+    Serial.print("Enviando datos: ");
+    Serial.println(data);
+    Serial.print("Resultado del envío: ");
+    Serial.println(result == ESP_OK ? "OK" : "Error");
+}
 void setup() {
     Serial.begin(115200);
     Serial.println("\n\n");
     
+    WiFi.mode(WIFI_STA);
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("Error al inicializar ESP-NOW");
+        while (1) delay(10);
+    }
+    Serial.println("ESP-NOW iniciado");
+
     pinMode(LED_BUILTIN, OUTPUT);
     printCentered("Sistema de Orientación BNO055");
     Serial.println("\n");
@@ -547,5 +605,9 @@ void loop() {
             nextPage();
             last_page_change = current_time;
         }
+
+        // Construir payload JSON y enviarlo vía ESP-NOW
+        String payload = buildSensorPayload();
+        sendDataToGateway(payload);
     }
 }
