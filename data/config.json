@@ -1,5 +1,5 @@
 {
-    "sample_rate_ms": 100,
+    "sample_rate_ms": 150,
     "history_size": 10,
     "calibration_threshold": 2,
     "max_init_attempts": 3,

@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 #include <Adafruit_BNO055.h>
 #include <Adafruit_Sensor.h>
 #include "utility/imumaths.h"
@@ -13,10 +14,14 @@
 #include "oled_module.h"
 #include "config_manager.h"
 #include "session_manager.h"
+#include "sensor_payload.h"
 #include <FS.h>
 #include <SD.h>
 #include <SPI.h>
 #include <time.h>
+
+const char* ssid     = "GL-MT300N-V2-0aa";
+const char* password = "goodlife";
 
 const float GRAVITY_EARTH = 9.80665F; // Constante de gravedad terrestre
 bool debug_bno055 = false; // Flag para modo debug. Si es true, se omite la calibración
@@ -26,7 +31,10 @@ bool debug_bno055 = false; // Flag para modo debug. Si es true, se omite la cali
 
 IMUHistory imuHistory;
 
-uint8_t gatewayMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // Envío broadcast
+uint8_t gatewayMAC[] = {0x9C, 0x9C, 0x1F, 0xCA, 0x28, 0x9C};  // Envío MAC del gateway
+
+QueueHandle_t espNowQueue;
+
 
 struct DerivedData {
     float total_acceleration;
@@ -228,62 +236,159 @@ void applyComplementaryFilter(float dt, const imu::Vector<3>& accel, const imu::
     Serial.println("°");
 }
 
+
+String formatIMUData(uint32_t timestamp, const imu::Vector<3>& accel, const imu::Vector<3>& gyro,
+    const imu::Vector<3>& mag, const imu::Quaternion& quat) {
+    
+        char buffer[128];
+    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f",
+    timestamp,
+    accel.x(), accel.y(), accel.z(),
+    gyro.x(), gyro.y(), gyro.z(),
+    mag.x(), mag.y(), mag.z(),
+    quat.w(), quat.x(), quat.y(), quat.z());
+    
+    return String(buffer);
+}
+
+String formatGPSData() {
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f,%f,%d,%f",
+    millis(),
+    gps.location.lat(), gps.location.lng(),
+    gps.altitude.meters(),
+    gps.speed.kmph(),
+    gps.satellites.value(),
+    gps.hdop.hdop());
+    
+    return String(buffer);
+}
+
+String formatEnvironmentalData(float temp, float pressure, float humidity) {
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f",
+    millis(),
+    temp, pressure, humidity);
+    
+    return String(buffer);
+}
 String getDeviceID() {
     String mac = WiFi.macAddress();  
     mac.replace(":", "");            
     // Tomamos los últimos 8 caracteres
-    return mac.substring(mac.length() - 8);
+    String deviceId =mac.substring(mac.length() - 8);  
+    deviceId.toLowerCase();
+    return deviceId;  // Retornamos el ID del dispositivo en minúsculas
 }
 
-String buildSensorPayload() {
-    unsigned long timestamp = millis();
-    String deviceID = getDeviceID();
-    
-    // Se asume que ya se han actualizado las variables globales y llamados a gpsProcess(), readBmpAhtData(), etc.
-    String imuData = formatIMUData(timestamp, 
-                                   bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL),
-                                   bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE),
-                                   bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER),
-                                   bno.getQuat());
-    
-    String gpsData = "";
-    gpsProcess();
-    if (gps.location.isValid()) {
-        gpsData = formatGPSData();
+int32_t getWiFiChannel(const char *ssid)
+{
+    if (int32_t n = WiFi.scanNetworks())
+    {
+        for (uint8_t i = 0; i < n; i++)
+        {
+            if (!strcmp(ssid, WiFi.SSID(i).c_str()))
+            {
+                return WiFi.channel(i);
+            }
+        }
     }
-    
-    readBmpAhtData();
-    String envData = formatEnvironmentalData((bmp_temperature + aht_temperature) / 2.0f,
-                                               bmp_pressure,
-                                               aht_humidity);
-    
-    String payload = "{";
-    payload += "\"device_id\":\"" + deviceID + "\",";
-    payload += "\"timestamp\":" + String(timestamp) + ",";
-    payload += "\"imu\":{\"data\":\"" + imuData + "\"},";
-    payload += "\"gps\":{\"data\":\"" + gpsData + "\"},";
-    payload += "\"env\":{\"data\":\"" + envData + "\"}";
-    payload += "}";
-    return payload;
+
+    return 0;
+}
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
+{
+    Serial.print("\nEstado de envío: ");
+    Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Enviado correctamente" : "Error en el envío ");
 }
 
-void sendDataToGateway(const String &data) {
-    int result = esp_now_send(gatewayMAC, (uint8_t*)data.c_str(), data.length());
-    Serial.print("Enviando datos: ");
-    Serial.println(data);
-    Serial.print("Resultado del envío: ");
-    Serial.println(result == ESP_OK ? "OK" : "Error");
+void senderTask(void *parameter) {
+    ESPNowMessage msg;
+    for (;;) {
+        // Espera infinitamente por un mensaje
+        if (xQueueReceive(espNowQueue, &msg, portMAX_DELAY) == pdTRUE) {
+            switch(msg.type) {
+                case IMU_PAYLOAD: {
+                    int result = esp_now_send(gatewayMAC, (uint8_t*)&(msg.payload.imu), sizeof(msg.payload.imu));
+                    Serial.print("Enviando datos IMU: ");
+                    Serial.println(result == ESP_OK ? "OK" : String("Error ") + result);
+                    break;
+                }
+                case GPS_PAYLOAD: {
+                    int result = esp_now_send(gatewayMAC, (uint8_t*)&(msg.payload.gps), sizeof(msg.payload.gps));
+                    Serial.print("Enviando datos GPS: ");
+                    Serial.println(result == ESP_OK ? "OK" : String("Error ") + result);
+                    break;
+                }
+                case ENV_PAYLOAD: {
+                    int result = esp_now_send(gatewayMAC, (uint8_t*)&(msg.payload.env), sizeof(msg.payload.env));
+                    Serial.print("Enviando datos ENV: ");
+                    Serial.println(result == ESP_OK ? "OK" : String("Error ") + result);
+                    break;
+                }
+            }
+            // Pequeño retraso entre envíos
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    }
+}
+
+void initTime() {
+    // Configura el NTP. Puedes ajustar el GMT offset y DST en segundos si es necesario
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
+    // Espera a que se sincronice la hora
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo, 5000)) {
+        Serial.println("Error al obtener la hora NTP");
+        return;
+    }
+    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
 }
 void setup() {
     Serial.begin(115200);
     Serial.println("\n\n");
     
     WiFi.mode(WIFI_STA);
+    int32_t channel = getWiFiChannel(ssid);
+    esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE); // Asegúrate de usar el mismo canal que el gateway
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    Serial.printf("\nCanal: %d", channel);
+
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    initTime();  // Esto actualiza la hora del sistema
+
+    Serial.println(" Conectado a Wi-Fi");
     if (esp_now_init() != ESP_OK) {
         Serial.println("Error al inicializar ESP-NOW");
         while (1) delay(10);
     }
+    esp_now_register_send_cb(OnDataSent);
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, gatewayMAC, 6);
+    peerInfo.channel = channel;
+    peerInfo.encrypt = false;
+    if (!esp_now_is_peer_exist(gatewayMAC))
+    {
+        esp_now_add_peer(&peerInfo);
+    }
+
     Serial.println("ESP-NOW iniciado");
+
+
+
+    // Crear la cola (capacidad para 10 mensajes)
+    espNowQueue = xQueueCreate(20, sizeof(ESPNowMessage));
+    if (espNowQueue == NULL) {
+        Serial.println("Error al crear la cola ESP-NOW");
+    }
+    // Crear la tarea que procesa la cola
+    xTaskCreate(senderTask, "senderTask", 4096, NULL, 1, NULL);
+    
 
     pinMode(LED_BUILTIN, OUTPUT);
     printCentered("Sistema de Orientación BNO055");
@@ -325,38 +430,13 @@ void setup() {
     // Inicializar OLED y mostrar pantalla de inicio
     initOled();  // Ahora incluye la pantalla de inicio con logo
 }
-
-String formatIMUData(uint32_t timestamp, const imu::Vector<3>& accel, const imu::Vector<3>& gyro,
-                    const imu::Vector<3>& mag, const imu::Quaternion& quat) {
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f",
-             timestamp,
-             accel.x(), accel.y(), accel.z(),
-             gyro.x(), gyro.y(), gyro.z(),
-             mag.x(), mag.y(), mag.z(),
-             quat.w(), quat.x(), quat.y(), quat.z());
-    return String(buffer);
+uint64_t getTimestampMs() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    uint64_t ms = ((uint64_t)tv.tv_sec * 1000LL) + (tv.tv_usec / 1000);
+    return ms;
 }
 
-String formatGPSData() {
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f,%f,%d,%f",
-             millis(),
-             gps.location.lat(), gps.location.lng(),
-             gps.altitude.meters(),
-             gps.speed.kmph(),
-             gps.satellites.value(),
-             gps.hdop.hdop());
-    return String(buffer);
-}
-
-String formatEnvironmentalData(float temp, float pressure, float humidity) {
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "%lu,%f,%f,%f",
-             millis(),
-             temp, pressure, humidity);
-    return String(buffer);
-}
 
 void loop() {
     handleKeyboardInterrupt();
@@ -606,8 +686,46 @@ void loop() {
             last_page_change = current_time;
         }
 
-        // Construir payload JSON y enviarlo vía ESP-NOW
-        String payload = buildSensorPayload();
-        sendDataToGateway(payload);
+         ESPNowMessage msg;
+        msg.type = IMU_PAYLOAD;
+        msg.payload.imu.type = IMU_PAYLOAD;  // Asigna el tipo dentro de la estructura
+
+        String deviceID = getDeviceID();
+        deviceID.toCharArray(msg.payload.imu.device_id, sizeof(msg.payload.imu.device_id));
+        msg.payload.imu.timestamp = getTimestampMs();
+        String imuData_ESP = formatIMUData(msg.payload.imu.timestamp, 
+                                    bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL),
+                                    bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE),
+                                    bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER),
+                                    bno.getQuat());
+        imuData_ESP.toCharArray(msg.payload.imu.imu, sizeof(msg.payload.imu.imu));
+        xQueueSend(espNowQueue, &msg, portMAX_DELAY);
+        
+        // Preparar y enviar datos GPS:
+        msg.type = GPS_PAYLOAD;
+        msg.payload.gps.type = GPS_PAYLOAD;
+
+        deviceID.toCharArray(msg.payload.gps.device_id, sizeof(msg.payload.gps.device_id));
+        msg.payload.imu.timestamp = getTimestampMs();
+        String gpsData = "";
+        gpsProcess();
+        if (gps.location.isValid()) {
+            gpsData = formatGPSData();
+        }
+        gpsData.toCharArray(msg.payload.gps.gps, sizeof(msg.payload.gps.gps));
+        xQueueSend(espNowQueue, &msg, portMAX_DELAY);
+        
+        // Preparar y enviar datos ambientales:
+        msg.type = ENV_PAYLOAD;
+        msg.payload.env.type = ENV_PAYLOAD;
+
+        deviceID.toCharArray(msg.payload.env.device_id, sizeof(msg.payload.env.device_id));
+        msg.payload.imu.timestamp = getTimestampMs();
+                readBmpAhtData();
+        String envData_ESP = formatEnvironmentalData((bmp_temperature + aht_temperature) / 2.0f,
+                                                bmp_pressure,
+                                                aht_humidity);
+        envData_ESP.toCharArray(msg.payload.env.env, sizeof(msg.payload.env.env));
+        xQueueSend(espNowQueue, &msg, portMAX_DELAY);
     }
 }
